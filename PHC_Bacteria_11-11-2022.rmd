@@ -1,0 +1,1769 @@
+---
+title: "P. muricata + Bacteria + EcM fungi"
+author: "LB"
+date: "11/15/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+root.dir="C:\Users\louis>"
+
+```
+
+```{r}
+
+# DADA2 workflow for processing 16S raw sequences
+# Follows https://benjjneb.github.io/dada2/tutorial.html
+
+library(dada2)
+library(ShortRead)
+library(Biostrings)
+
+
+#-#-#-#-#-#-#-
+
+path <- "PR+Hum+CI/16S"
+list.files(path)
+
+# Forward and reverse fastq filenames have format: SAMPLENAME_R1_001.fastq.gz and SAMPLENAME_R2_001.fastq.gz
+fnFs <- sort(list.files(path, pattern="_L001_R1_001.fastq.gz", full.names = TRUE)) # If set to be FALSE, then working directory must contain the files
+fnRs <- sort(list.files(path, pattern="_L001_R2_001.fastq.gz", full.names = TRUE))
+
+# Remove any forward files that don't have reverse counterparts, and vise versa
+# (filterAndTrim will throw an error if fnFs and fnRs have any mismatches)
+basefilenames_Fs <- sub("_L001_R1_001.fastq.gz","",basename(fnFs))
+basefilenames_Rs <- sub("_L001_R2_001.fastq.gz","",basename(fnRs))
+rm_from_fnFs <- basefilenames_Fs[which(!(basefilenames_Fs %in% basefilenames_Rs))]
+rm_from_fnRs <- basefilenames_Rs[which(!(basefilenames_Rs %in% basefilenames_Fs))]
+
+for(name in rm_from_fnFs) {
+  print(paste(name, "does not have a reverse-reads counterpart. Omitting from this analysis."))
+  fnFs <- fnFs[-which(fnFs == paste0(path, "/", name, "_L001_R1_001.fastq.gz"))]
+}
+for(name in rm_from_fnRs) {
+  print(paste(name, "does not have a forward-reads counterpart. Omitting from this analysis."))
+  fnRs <- fnRs[-which(fnRs == paste0(path, "/", name, "_L001_R2_001.fastq.gz"))]
+}
+
+
+# Identify primers - used 515F & 806R from Hiro's spreadsheet
+FWD <- "GTGYCAGCMGCCGCGGTAA"  ## CHANGE ME to your forward primer seq
+REV <- "GGACTACNVGGGTWTCTAAT"  ## CHANGE ME...
+
+
+# Get all orientations of primers, just to be safe
+# Note - changed this for the dimensions project due to different sequencing primers
+# Used
+
+allOrients <- function(primer) {
+  # Create all orientations of the input sequence
+  require(Biostrings)
+  dna <- DNAString(primer)  # The Biostrings works w/ DNAString objects rather than character vectors
+  orients <- c(Forward = dna, Complement = complement(dna), Reverse = reverse(dna), 
+               RevComp = reverseComplement(dna))
+  return(sapply(orients, toString))  # Convert back to character vector
+}
+FWD.orients <- allOrients(FWD)
+REV.orients <- allOrients(REV)
+FWD.orients
+
+# “pre-filter” the sequences just to remove those with Ns, but perform no other filtering
+fnFs.filtN <- file.path(path, "filtN", basename(fnFs)) # Put N-filterd files in filtN/ subdirectory
+fnRs.filtN <- file.path(path, "filtN", basename(fnRs))
+filterAndTrim(fnFs, fnFs.filtN, fnRs, fnRs.filtN, maxN = 1, multithread = TRUE)
+
+# (From tutorial) We are now ready to count the number of times the primers appear in the 
+# forward and reverse read, while considering all possible primer orientations. 
+# Identifying and counting the primers on one set of paired end FASTQ files is
+# sufficient, assuming all the files were created using the same library preparation,
+# so we’ll just process the first sample.
+
+primerHits <- function(primer, fn) {
+  # Counts number of reads in which the primer is found
+  nhits <- vcountPattern(primer, sread(readFastq(fn)), fixed = FALSE)
+  return(sum(nhits > 0))
+}
+
+rbind(FWD.ForwardReads = sapply(FWD.orients, primerHits, fn = fnFs.filtN[[1]]), 
+      FWD.ReverseReads = sapply(FWD.orients, primerHits, fn = fnRs.filtN[[1]]), 
+      REV.ForwardReads = sapply(REV.orients, primerHits, fn = fnFs.filtN[[1]]), 
+      REV.ReverseReads = sapply(REV.orients, primerHits, fn = fnRs.filtN[[1]]))
+
+# If you see the reverse-complement of the forward primer in the reverse reads (cells [2,4] and [3,4]),
+# it's because the ITS region is short and it is reading part of the forward primer.
+
+# Remove primers using cutadapt
+
+cutadapt <- "miniconda3/condabin/cutadapt.exe" # CHANGE ME to the cutadapt path on your machine
+system2(cutadapt, args = "--version") # Run shell commands from R
+
+path.cut <- file.path(path, "cutadapt")
+if(!dir.exists(path.cut)) dir.create(path.cut)
+fnFs.cut <- file.path(path.cut, basename(fnFs.filtN))
+fnRs.cut <- file.path(path.cut, basename(fnRs.filtN))
+
+FWD.RC <- dada2:::rc(FWD)
+REV.RC <- dada2:::rc(REV)
+# Trim FWD and the reverse-complement of REV off of R1 (forward reads)
+R1.flags <- paste("-g", FWD, "-a", REV.RC) 
+# Trim REV and the reverse-complement of FWD off of R2 (reverse reads)
+R2.flags <- paste("-G", REV, "-A", FWD.RC) 
+# Run Cutadapt
+for(i in seq_along(fnFs.filtN)) {
+# for(i in 1:10) {
+  system2(cutadapt, args = c(R1.flags, R2.flags, "-n", 2, # -n 2 required to remove FWD and REV from reads
+                             "-o", fnFs.cut[i], "-p", fnRs.cut[i], # output files
+                             fnFs.filtN[i], fnRs.filtN[i], # input files; fnFs.filtN replaced by fnFs.filtN, etc.
+                             "--minimum-length", "1")) # min length of cutadapted reads: >0 
+}
+
+# Count primers in first post-cutadapt sample (should all be 0):
+rbind(FWD.ForwardReads = sapply(FWD.orients, primerHits, fn = fnFs.cut[[50]]), 
+      FWD.ReverseReads = sapply(FWD.orients, primerHits, fn = fnRs.cut[[50]]), 
+      REV.ForwardReads = sapply(REV.orients, primerHits, fn = fnFs.cut[[50]]), 
+      REV.ReverseReads = sapply(REV.orients, primerHits, fn = fnRs.cut[[50]]))
+
+# Since they are zero, skip step to remove other orientations of primers
+
+# Forward and reverse fastq filenames have the format:
+cutFs <- sort(list.files(path.cut, pattern = "_L001_R1_001.fastq.gz", full.names = TRUE))
+cutRs <- sort(list.files(path.cut, pattern = "_L001_R2_001.fastq.gz", full.names = TRUE))
+
+# Extract sample names, assuming filenames have format:
+get.sample.name <- function(fname) {
+  paste(strsplit(basename(fname), split="_")[[1]][1:3], collapse="_")
+}
+sample.names <- unname(sapply(cutFs, get.sample.name))
+head(sample.names)
+
+# Inspect read quality profiles of forward reads #1-2
+plotQualityProfile(cutFs[1:12])
+
+# Inspect read quality profiles of reverse reads #1-2
+plotQualityProfile(cutRs[1:12])
+
+# Filter and trim
+
+# Assigning the filenames for the output of the filtered reads 
+# to be stored as fastq.gz files.
+filtFs <- file.path(path, "filtered", basename(fnFs.filtN))
+filtRs <- file.path(path, "filtered", basename(fnRs.filtN))
+
+out <- filterAndTrim(cutFs, filtFs, cutRs, filtRs, maxN = 0, maxEE = c(2, 2), truncQ = 2, minLen = 100, rm.phix = TRUE, compress = TRUE, multithread = TRUE)  # on windows, set multithread = FALSE
+head(out)
+
+filtFs.out <- list.files(paste(path, "filtered", sep="/"), pattern="_L001_R1_001.fastq.gz", full.names=TRUE)
+filtRs.out <- list.files(paste(path, "filtered", sep="/"), pattern="_L001_R2_001.fastq.gz", full.names=TRUE)
+
+# Learn the error rates
+errF <- learnErrors(filtFs.out, multithread = TRUE)
+errR <- learnErrors(filtRs.out, multithread = TRUE)
+
+# Visualize estimated error rates
+plotErrors(errF, nominalQ = TRUE)
+
+# Dereplicate identical reads
+derepFs <- derepFastq(filtFs.out, verbose = TRUE)
+derepRs <- derepFastq(filtRs.out, verbose = TRUE)
+# Name the derep-class objects by the sample names
+get.sample.name <- function(fname) {
+  paste(strsplit(basename(fname), "_")[[1]][1:3], collapse="_")
+}
+sample.names <- unname(sapply(filtFs.out, get.sample.name))
+
+# DADA2's core sample inference algorithm
+dadaFs <- dada(derepFs, err = errF, multithread = TRUE)
+dadaRs <- dada(derepRs, err = errR, multithread = TRUE)
+
+          
+# Merge pairs
+mergers <- mergePairs(dadaFs, derepFs, dadaRs, derepRs, verbose=TRUE,trimOverhang = TRUE)
+
+# Construct sequence table
+seqtab <- makeSequenceTable(mergers)
+dim(seqtab)
+
+# Remove chimeras
+seqtab.nochim <- removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, verbose=TRUE)
+
+saveRDS(seqtab,"PR+Hum+CI_seqtab.bac.rds")
+saveRDS(seqtab.nochim,"PR+Hum+CI_seqtab.bac.nochim.rds")
+
+# Inspect distribution of sequence lengths
+hist(nchar(getSequences(seqtab.nochim)))
+
+# Track reads through pipeline
+getN <- function(x) sum(getUniques(x))
+
+#format out to accommodate dropped samples
+raw.sample.names <- unname(sapply(row.names(out), get.sample.name))
+
+track <- cbind(sapply(dadaFs, getN), sapply(dadaRs, getN), 
+               sapply(mergers, getN), rowSums(seqtab.nochim))
+
+track2<-cbind(out,track[match(row.names(out),row.names(track)),])
+
+# If processing a single sample, remove the sapply calls: e.g. replace
+# sapply(dadaFs, getN) with getN(dadaFs)
+colnames(track2) <- c("input", "filtered", "denoisedF", "denoisedR", "merged", 
+                     "nonchim")
+write.csv(track2,"PR+Hum+CI_bac_summary.csv")
+
+rownames(track) <- sample.names
+head(track2)
+
+```
+
+```{r combine runs}
+
+# Assign taxonomy using the UNITE database
+silva.ref<-"silva_nr99_v138_train_set.fa.gz"
+silva.species<-"silva_species_assignment_v138.fa.gz"
+
+taxa <- assignTaxonomy(seqtab.nochim, silva.ref, multithread = TRUE, tryRC = TRUE)
+
+taxa <- addSpecies(taxa, silva.species)
+
+taxa.print <- taxa  # Removing sequence rownames for display only
+rownames(taxa.print) <- NULL
+head(taxa.print)
+
+
+# Save OTU table and taxonomic table as RDS files
+# to hand off to dada2_to_phyloseq.R
+saveRDS(seqtab.nochim, "PR+Hum+CI_16S_seqtab_nochim_taxa_3-2-22")
+saveRDS(taxa, "PR+Hum+CI_16S_taxa_3-2-22.rds")
+
+
+```
+
+```{construct phyloseq object with sample data variables}
+
+#read in environmental sample table
+
+sample <- readRDS("PR+Hum+CI_16S_seqtab_nochim_taxa_3-2-22.rds")
+SD <- read.csv("PR+H+CI_16S_SampleData.csv", row.names = 1)
+SAM <- sample_data(SD, errorIfNULL = T)
+taxa <- readRDS("PR+Hum+CI_16S_taxa_3-2-22.rds")
+
+#create a phyloseq object
+bac.ps <- phyloseq(otu_table(sample, taxa_are_rows=FALSE), sample_data(SAM), tax_table(taxa))
+
+#filter out unwanted taxa (e.g., mitochondira and chloroplast sequences)
+bac.ps.filt<-subset_taxa(bac.ps,Family!="Mitochondria")
+bac.ps.filt<-subset_taxa(bac.ps.filt,Genus!="Chloroplast")
+
+# Removing sequence rownames for display only
+taxa.print <- tax_table(bac.ps.filt)
+rownames(taxa.print) <- NULL
+head(taxa.print)
+
+#save the filtered dataset 
+saveRDS(bac.ps.filt,"PHC.16S.filtered.3-2-22.rds")
+
+#filter out low abundant sequences
+bac.ps.filt2 = prune_taxa(taxa_sums(bac.ps.filt) > 10, bac.ps.filt) 
+bac.ps.filt2 = prune_samples(sample_sums(bac.ps.filt2)>1000, bac.ps.filt2)
+
+#save the filtered+pruned dataset
+saveRDS(bac.ps.filt2, "PHC.16S.filt-prune.rds")
+
+#rarefy the dataset
+bac.ps.rare <- rarefy_even_depth(bac.ps.filt2, sample.size = min(sample_sums(bac.ps.filt2)),
+  rngseed = FALSE, replace = TRUE, trimOTUs = TRUE, verbose = TRUE)
+
+#save rarefied dataset
+saveRDS(bac.ps.rare, "Rarefied-PHC-Bacteria.rds")
+
+#create ASV-TAX table [Table S2]
+taxa_names(bac.ps.rare) <- paste0("Seq", seq(ntaxa(bac.ps.rare)))
+ASV_BAC <- data.frame(otu_table(bac.ps.rare))
+TAX_ASV <- data.frame(tax_table(bac.ps.rare))
+ASV_BAC_T <- t(ASV_BAC)
+MERGER2 <- merge(ASV_BAC_T, TAX_ASV, by = "row.names")
+write.csv(MERGER2, "ASV_Bacteria_PHC_Rare_Final.csv")
+
+#create the combined OTU table plus taxonomy string metacoder needs
+
+#read it in using phyloseq object
+tax_table(bac.ps.rare)<-tax_table(bac.ps.filt2)[,1:7]
+x1<-parse_phyloseq(bac.ps.rare)
+
+#calculate relative abundance
+x1$data$abund_data <- calc_obs_props(x1, "otu_table")
+
+#calculate total abundance by compartment (Bulk Soil, Rhizosphere, Endosphere)
+x1$data$Comparment_abund<-calc_taxon_abund(x1, "abund_data",groups=x1$data$sample_data$Compartment)
+
+```
+
+```{Phylum level relative abundance plots + top OTUs x Genus x Compartment x Site}
+
+library(tidyverse)
+library(RColorBrewer)
+library(ggsci)
+
+#transform data [compositional]
+pseq <- microbiome::transform(bac.ps.rare, "compositional")
+
+#save as RDS
+saveRDS(pseq, "PHC-Bacteria-PS_filter+rare+tran.rds")
+
+#create dataframe 
+pseqDF <- psmelt(pseq)
+
+#get appropriate number of colors for data
+getPalette <- colorRampPalette(brewer.pal(9, "Set1"))
+colourCount = length(unique(pseqDF$Phylum))
+
+#plot the relative abundance by Phylum
+gg <- ggplot(pseqDF, aes(fill=Phylum, y=Abundance, x=Compartment)) + geom_bar(position="fill", stat="identity") + theme_minimal() + facet_grid(~SWS) + scale_fill_manual(values = getPalette(colourCount)) + ylab("Relative Abundance") + theme(axis.text.x = element_text(angle=45)) + scale_y_continuous(labels = scales::percent)
+
+#alternative relative abundance plot by Phylum
+ggplot(pseqDF, aes(fill=Phylum, y=Abundance, x=Compartment)) + geom_bar(position="fill", stat="identity", alpha = 0.9) + theme_minimal() + facet_grid(~SWS) + scale_fill_manual(values = c("#00AFBB", "#D16103", "#52854C", "#E69F00", "#999999", "#009E73", "#F0E442", "#56B4E9", "#D55E00", "#CC79A7", "#FFDB6D", "#C4961A", "#F4EDCA","#FC4E07", "#C3D7A4", "#E7B800", "#4E84C4", "#293352", "#1B9E77", "#0072B2", "#A6761D")) + ylab("Relative Abundance") + theme(axis.text.x = element_text(angle=45)) + scale_y_continuous(labels = scales::percent)
+
+#merge low abundant phyla
+pseqDF$Phylum[pseqDF$Phylum == "Abditibacteriota" | pseqDF$Phylum == "Armatimonadota" | pseqDF$Phylum == "Bdellovibrionota" | pseqDF$Phylum == "Chloroflexi" | pseqDF$Phylum == "Crenarchaeota" | pseqDF$Phylum == "Cyanobacteria" | pseqDF$Phylum == "Desulfobacterota" | pseqDF$Phylum == "Fibrobacterota" | pseqDF$Phylum == "Gemmatimonadota" | pseqDF$Phylum == "Myxococcota" | pseqDF$Phylum == "Nitrospirota" | pseqDF$Phylum == "Patescibacteria" | pseqDF$Phylum == "Spirochaetota" | pseqDF$Phylum == "Sumerlaeota"] <- "Other Phyla"
+
+#alternative No.2
+ggplot(pseqDF, aes(fill=Phylum, y=Abundance, x=Compartment)) + geom_bar(position="fill", stat="identity") + theme_bw() + facet_grid(~SWS) + scale_fill_manual(values = c("darkgoldenrod2", "darkolivegreen", "firebrick3", "gold3", "dodgerblue4", "honeydew3", "lightpink4", "gray1")) + ylab("Relative Abundance") + theme(axis.text.x = element_text(angle=45)) + scale_y_continuous(labels = scales::percent) + theme(axis.text.x = element_text(hjust = 1, face = "bold", size = 12)) + theme(axis.text.y = element_text(face = "bold", size = 14)) + theme(axis.title.y = element_text(size = 16, face = "bold")) + theme(legend.title = element_text(size = 14, face = "bold")) + xlab("") + theme(strip.text.x = element_text(size = 16, face = "bold")) + theme(legend.text = element_text(size = 10, face = "bold"))
+#save
+ggsave(
+    filename = "PHC_BAC_Phylum_STACKED-BAR.png",
+    plot = last_plot(),
+    device = NULL,
+    path = NULL,
+    scale = 1,
+    width = 5.2,
+    height = 6,
+    units = c("in"),
+    dpi = 300)
+
+#Top 20 Bacterial genera by region and compartment 
+BAC.RARE <- readRDS("Rarefied-PHC-Bacteria.rds")
+BAC.RARE2 <- psmelt(BAC.RARE)
+View(BAC.RARE2)
+TOP20.NRA <- subset(BAC.RARE2, Genus == "Acidothermus" | Genus == "Burkholderia-Caballeronia-Paraburkholderia" | Genus == "Candidatus Udaeobacter" | Genus == "Mucilaginibacter" | Genus == "Bryobacter" | Genus == "Roseiarcus" | Genus == "Mycobacterium" | Genus == "Conexibacter" | Genus == "Bradyrhizobium" | Genus == "Acidibacter" | Genus == "Acidipila-Silvibacterium" | Genus == "Candidatus Solibacter" | Genus == "Granulicella" | Genus == "Occallatibacter" | Genus == "Sphingomonas" | Genus == "Puia" | Genus == "Aquisphaera" | Genus == "Acidocella" | Genus == "Streptomyces" | Genus == "Reyranella")
+write.csv(TOP20.NRA, "TOP20.Bacteria.NRA.csv")
+TO <- read.csv("TOP20.Bacteria.NRA.csv")
+ggplot(TO, aes(x=Genus, y=log(Abundance))) + xlab("") + ylab("Log[No. of Sequences]") + geom_bar(stat="identity", fill = c("black")) + coord_flip() + theme_bw() + theme(strip.text = element_text(size = 8, face = "bold")) + theme(axis.text.x = element_text(size = 6, face = "bold")) + theme(axis.text.y = element_text(size = 6, face = "bold.italic")) + theme(axis.title.x = element_text(size = 7, face = "bold", vjust = 0.5)) + facet_grid(SWS~Compartment)
+
+#rearrange the facet labels to Bulk soil -> Rhizosphere -> Endosphere & HC - PRNS - CINP
+TO$Compartment <- factor(TO$Compartment, levels=c("Bulk soil", "Rhizosphere", "Endosphere"))
+TO$SWS <- factor(TO$SWS, levels=c("HC", "PRNS", "CINP"))
+#plot
+ggsave(filename = "Top20_Bacteria_Genus_BAR_Comp.Region2.png", scale = 1, height = 5, width = 5, units = "in", dpi = 300, plot = last_plot())
+#save (first unordered plot)
+ggsave(filename = "Top20_Bacteria_Genus_BAR_Comp.Region.png", scale = 1, height = 5, width = 5, units = "in", dpi = 300, plot = last_plot())
+
+
+```
+
+```{alpha diversity}
+
+library(phyloseq)
+
+#read in non-transformed phyloseq
+pseq.non.tran <- readRDS("PHC-16S-COMP.rds")
+
+#estimate richness based on samples
+bacaDIV <- estimate_richness(pseq.non.tran)
+
+#export/save alpha diversity table
+write.csv(bacaDIV, "alphaDIV_Bacteria.csv")
+
+#plot alpha diversity {use non-normalized count data}
+plot_richness(pseq.non.tran, x = "Compartment", measures = c("Observed", "Chao1", "Shannon", "Fisher")) + theme_minimal() + xlab("") + geom_jitter(aes(fill=SWS), size = 2.5, colour="black", pch=21, stroke = 1.5, width = 0.2, alpha = 0.9) + theme(axis.text.x = element_text(angle = 45)) + labs(title = "Bacterial Community") + labs(fill = "Site")
+
+#boxplot
+F1 <- plot_richness(pseq.non.tran, x = "SWS", color = "Compartment", measures = c("Observed", "Chao1", "Shannon", "Fisher")) + theme_minimal() + xlab("") + theme(axis.text.x = element_text(angle = 45)) + labs(title = "Bacterial Community") + geom_boxplot() 
+
+F1 + scale_color_manual(values= wes_palette("BottleRocket2", n=3))
+
+#anova test
+test <- psmelt(pseq.non.tran)
+anova_result <- aov(Abundance ~ SWS, test)
+summary(anova_result)
+
+anova_result2 <- aov(Abundance ~ Compartment, test)
+summary(anova_result2)
+
+#tukey test
+library(agricolae)
+
+tukey_result <- HSD.test(anova_result, "SWS", group = TRUE)
+print(tukey_result)
+
+tukey_result2 <- HSD.test(anova_result2, "Compartment", group = TRUE)
+print(tukey_result2)
+
+
+```
+
+```{NMDS ordinations}
+
+#perform an NMDS ordination
+ord.bac <- ordinate(pseq, "NMDS", "bray", k=3)
+
+#plot NMDS ordination [axes 2:3]
+all.bac <- plot_ordination(pseq, ord.bac, type="sample", color="Compartment",shape="SWS", axes=2:3) + theme_minimal() + scale_color_jco() + geom_point(size = 4, alpha = 1)
+
+#plot NMDS ordination [axes 1:2]
+plot_ordination(pseq, ord.bac, type="sample", color="Compartment",shape="SWS", axes=1:2) + theme_minimal() + scale_color_jco() + geom_point(size = 4, alpha = 1)
+
+#remove shape = "SWS" as a plotted factor
+all.bac2 <- plot_ordination(pseq, ord.bac, type="sample", color="Compartment", axes=2:3) + theme_minimal() + scale_color_jco() + geom_point(size = 4, alpha = 1)
+#second plot for comparative purposes
+plot_ordination(pseq, ord.bac, type="sample", color="Compartment", axes=1:2) + theme_minimal() + scale_color_jco() + geom_point(size = 4, alpha = 1)
+
+#add ellipses
+all.bac2 + stat_ellipse(type ="norm", linetype = 2) + stat_ellipse(type ="t")
+
+#plot in Figure 2
+all.bac <- plot_ordination(pseq, ord.bac, type="sample", color="SWS", axes=1:2) + theme_minimal() + scale_color_manual(values = wes_palette("Darjeeling1", n=3)) + geom_point(size = 4, alpha = 1)
+
+#alternative plots
+#region
+plot_ordination(BAC.PS, ord.bac, type="sample", color="SWS", axes=1:2) + theme_bw() + scale_color_manual(values = wes_palette("Darjeeling1", n=3)) + geom_point(size = 4, alpha = 1) + stat_ellipse(type = "norm", linetype = 2) + guides(color = guide_legend(title = "Region")) + theme(axis.text = element_text(size = 12, face = "bold")) + theme(axis.title = element_text(size = 14, face = "bold")) + labs(title = "Bacterial Communities") + theme(legend.title = element_text(size = 14))
+#save
+ggsave(
+    filename = "PHC_BAC_REGION_NMDS.png",
+    plot = last_plot(),
+    device = NULL,
+    path = NULL,
+    scale = 1,
+    width = 3.3,
+    height = 3.2,
+    units = c("in"),
+    dpi = 300)
+#axis 2-3
+plot_ordination(BAC.PS, ord.bac, type="sample", color="SWS", axes=2:3) + theme_bw() + scale_color_manual(values = wes_palette("Darjeeling1", n=3)) + geom_point(size = 4, alpha = 1) + stat_ellipse(type = "norm", linetype = 2) + guides(color = guide_legend(title = "Region")) + theme(axis.text.x = element_text(size = 10, face = "bold", angle = 45)) + theme(axis.text.y = element_text(size = 12, face = "bold")) + theme(axis.title = element_text(size = 14, face = "bold")) + theme(legend.position = "none")
+#facet
+plot_ordination(BAC.PS, ord.bac, type="sample", color="SWS", axes=2:3) + theme_bw() + scale_color_manual(values = wes_palette("Darjeeling1", n=3)) + geom_point(size = 4, alpha = 1) + stat_ellipse(type = "norm", linetype = 2) + theme(axis.text.y = element_text(size = 12, face = "bold")) + theme(axis.text.x = element_text(size = 10, face = "bold")) + theme(axis.title = element_text(size = 14, face = "bold")) + labs(title = "Bacterial Communities") + theme(legend.position = "none") + facet_grid(~Compartment) + theme(strip.text = element_text(size = 10, face = "bold"))
+#save
+ggsave(
+    filename = "PHC_BAC_REGION_NMDS2-3_FACET.png",
+    plot = last_plot(),
+    device = NULL,
+    path = NULL,
+    scale = 1,
+    width = 4,
+    height = 3.5,
+    units = c("in"),
+    dpi = 300)
+
+#subset phyloseq for ordinations/plots by select sample_data variables (e.g., Compartment)
+PRNS.bac <- subset_samples(pseq, SWS=="PRNS")
+CINP.bac <- subset_samples(pseq, SWS == "CINP")
+HC.bac <- subset_samples(pseq, SWS =="HC")
+
+#ordinate the subset ordinations
+PRNS.ord.bac <- ordinate(PRNS, "NMDS", "bray", k=3)
+CINP.ord.bac <- ordinate(CINP, "NMDS", "bray", k=3)
+HC.ord.bac <- ordinate(HC, "NMDS", "bray", k=3)
+
+#plot subset ordinations
+#PRNS [axes 1:2]
+PRNS.ord.bac.plot <- plot_ordination(PRNS.bac, PRNS.ord.bac, type="sample",color="Compartment", axes=1:2) + theme_minimal() + scale_color_brewer(palette = "Dark2") + geom_point(size = 4, alpha = 0.8)
+#PRNS [axes 2:3]
+PRNS.ord.bac.plot2 <- plot_ordination(PRNS.bac, PRNS.ord.bac, type="sample",color="Compartment", axes=2:3) + theme_minimal() + scale_color_brewer(palette = "Dark2") + geom_point(size = 4, alpha = 0.8)
+#CINP [axes 1:2]
+CINP.ord.bac.plot <- plot_ordination(CINP.bac, CINP.ord.bac, type="sample", color="Compartment", axes = 1:2) + theme_minimal() + scale_color_brewer(palette = "Dark2") + geom_point(size = 4, alpha = 0.8)
+#CINP [axes 2:3]
+CINP.ord.bac.plot2 <- plot_ordination(CINP.bac, CINP.ord.bac, type="sample", color="Compartment", axes = 2:3) + theme_minimal() + scale_color_brewer(palette = "Dark2") + geom_point(size = 4, alpha = 0.8)
+#HC [axes 1:2]
+HC.ord.bac.plot <- plot_ordination(HC.bac, HC.ord.bac, type="sample", color="Compartment", axes = 1:2) + theme_minimal() + scale_color_brewer(palette = "Dark2") + geom_point(size = 4, alpha = 0.8)
+#HC [axes 2:3]
+HC.ord.bac.plot2 <- plot_ordination(HC.bac, HC.ord.bac, type="sample", color="Compartment", axes = 2:3) + theme_minimal() + scale_color_brewer(palette = "Dark2") + geom_point(size = 4, alpha = 0.8)
+
+
+#add normal and Student's t distribution ellipses
+#PRNS dataset
+PRNS.ord.bac.plot + stat_ellipse(type = "norm", linetype = 2) + stat_ellipse(type = "t")
+#CINP
+CINP.ord.bac.plot + stat_ellipse(type = "norm", linetype = 2) + stat_ellipse(type = "t")
+#HC
+HC.ord.bac.plot + stat_ellipse(type = "norm", linetype = 2) + stat_ellipse(type = "t")
+#all datasets (e.g., PRNS+CINP+HC)
+all.bac + stat_ellipse(type ="norm", linetype = 2) + stat_ellipse(type ="t")
+
+
+```
+
+```{PERMANOVA}
+
+#calculate bray-curtis distance matrix
+library(vegan)
+ord.bac.bray <- phyloseq::distance(pseq, method = "bray", k=3)
+
+#make a dataframe from the sample_data
+ord.bac.bray.sampleDF <- data.frame(sample_data(pseq))
+
+#adonis test
+PERMANOVA <- adonis(ord.bac.bray ~ Compartment / SWS, data = ord.bac.bray.sampleDF, strata = ord.bac.bray.sampleDF$SWS)
+
+#write PERMANOVA results to table CSV
+list <- PERMANOVA[["aov.tab"]]
+write.csv(list, "PHC_Bac_Permanova.csv")
+
+# perform a pairwise adonis test
+library(pairwiseAdonis)
+
+#pairwise adonis by compartment
+BAC_COMP_pwAdonis <- pairwise.adonis(ord.bac.bray,ord.bac.bray.sampleDF$Compartment)
+#pairwise adonis by state-wide sites
+BAC_SWS_pwAdonis <- pairwise.adonis(ord.bac.bray,ord.bac.bray.sampleDF$SWS)
+#pairwise adonis by local sites
+BAC_LS_pwAdonis <- pairwise.adonis(ord.bac.bray,ord.bac.bray.sampleDF$LS)
+
+#write all pairwise Adonis tests as CSVs
+write.csv(BAC_COMP_pwAdonis, "PHC_Bac-Comp_pwAdonis.tab.csv")
+write.csv(BAC_SWS_pwAdonis, "PHC_Bac-SWS_pwAdonis.tab.csv")
+write.csv(BAC_LS_pwAdonis, "PHC_Bac-LS_pwAdonis.tab.csv")
+
+
+```
+
+```{betadisper, permutest, and ANOSIM}
+
+#run betadisper function on distance matrix
+beta_adonis <- betadisper(ord.bac.bray, ord.bac.bray.sampleDF$Compartment, bias.adjust = TRUE)
+
+#stats
+stat_disp_anova <- anova(beta_adonis)
+stat_disp_tukey <- TukeyHSD(stat_disp_anova)
+plot(beta_adonis, hull=FALSE, ellipse=TRUE)
+
+#pairwise permutation test for homogeneity of multivariate dispersions
+permutest(beta_adonis, pairwise = TRUE, permutations = 1000)
+
+#ANOSIM
+compgroup <- get_variables(pseq, "Compartment")
+compASIM <- anosim(distance(pseq, "bray"), grouping = compgroup)
+ASIM_summary <- compASIM
+
+```
+
+```{differential abundance with DESeq2}
+
+#read phyloseq object [data pruned and rarefied]
+pseq.rare <- readRDS("PHC-16S-COMP.rds")
+
+#subset phyloseq based on sample_data [Bulk soil vs. Endosphere]
+pseq.rare.BS.ES <- subset_samples(pseq.rare, Compartment == "Bulk soil" | Compartment == "Endosphere")
+
+#subset phyloseq based on sample_data [Rhizosphere vs. Endopshere]
+Endo_Rhizo <- subset_samples(pseq.rare, Compartment == "Rhizosphere" | Compartment == "Endosphere")
+
+#subset Bulk soil and Endosphere by SWS
+PRNS.BS.ES <- subset_samples(pseq.rare.BS.ES, SWS == "PRNS")
+CINP.BS.ES <- subset_samples(pseq.rare.BS.ES, SWS == "CINP")
+HC.BS.ES <- subset_samples(pseq.rare.BS.ES, SWS == "HC")
+
+#subset Rhizosphere and Endosphere by SWS
+PRNS.RS.ES <- subset_samples(Endo_Rhizo, SWS == "PRNS")
+CINP.RS.ES <- subset_samples(Endo_Rhizo, SWS == "CINP")
+HC.RS.ES <- subset_samples(Endo_Rhizo, SWS == "HC")
+
+#convert phyloseq to DESeq2 format
+dds <- phyloseq_to_deseq2(pseq.rare.BS.ES, ~ Compartment)
+dds2 <- phyloseq_to_deseq2(Endo_Rhizo, ~ Compartment)
+dds3 <- phyloseq_to_deseq2(PRNS.BS.ES, ~ Compartment)
+dds4 <- phyloseq_to_deseq2(CINP.BS.ES, ~ Compartment)
+dds5 <- phyloseq_to_deseq2(HC.BS.ES, ~ Compartment)
+dds6 <- phyloseq_to_deseq2(PRNS.RS.ES, ~ Compartment)
+dds7 <- phyloseq_to_deseq2(CINP.RS.ES, ~ Compartment)
+dds8 <- phyloseq_to_deseq2(HC.RS.ES, ~ Compartment)
+
+#calculate size factors using edgeR
+library(edgeR)
+sizeFactors(dds) <- calcNormFactors(counts(dds))
+sizeFactors(dds2) <- calcNormFactors(counts(dds2))
+sizeFactors(dds3) <- calcNormFactors(counts(dds3))
+sizeFactors(dds4) <- calcNormFactors(counts(dds4))
+sizeFactors(dds5) <- calcNormFactors(counts(dds5))
+sizeFactors(dds6) <- calcNormFactors(counts(dds6))
+sizeFactors(dds7) <- calcNormFactors(counts(dds7))
+sizeFactors(dds8) <- calcNormFactors(counts(dds8))
+
+#run DESeq function
+dds = DESeq(dds, test="Wald", fitType="parametric")
+dds2 = DESeq(dds2, test="Wald", fitType="parametric")
+dds3 = DESeq(dds3, test="Wald", fitType="parametric")
+dds4 = DESeq(dds4, test="Wald", fitType="parametric")
+dds5 = DESeq(dds5, test="Wald", fitType="parametric")
+dds6 = DESeq(dds6, test="Wald", fitType="parametric")
+dds7 = DESeq(dds7, test="Wald", fitType="parametric")
+dds8 = DESeq(dds8, test="Wald", fitType="parametric")
+
+res <- results(dds, cooksCutoff = FALSE)
+alpha = 0.1
+sigtab <- res[which(res$padj < alpha), ]
+sigtab <- cbind(as(sigtab, "data.frame"), as(tax_table(pseq.rare.BS.ES)[rownames(sigtab), ], "matrix"))
+
+res2 <- results(dds2, cooksCutoff = FALSE)
+alpha = 0.1
+sigtab2 <- res2[which(res2$padj < alpha), ]
+sigtab2 <- cbind(as(sigtab2, "data.frame"), as(tax_table(Endo_Rhizo)[rownames(sigtab2), ], "matrix"))
+
+res3 <- results(dds3, cooksCutoff = FALSE)
+alpha = 0.1
+sigtab3 <- res3[which(res3$padj < alpha), ]
+sigtab3 <- cbind(as(sigtab3, "data.frame"), as(tax_table(PRNS.BS.ES)[rownames(sigtab3), ], "matrix"))
+
+res4 <- results(dds4, cooksCutoff = FALSE)
+alpha = 0.1
+sigtab4 <- res4[which(res4$padj < alpha), ]
+sigtab4 <- cbind(as(sigtab4, "data.frame"), as(tax_table(CINP.BS.ES)[rownames(sigtab4), ], "matrix"))
+
+res5 <- results(dds5, cooksCutoff = FALSE)
+alpha = 0.1
+sigtab5 <- res5[which(res5$padj < alpha), ]
+sigtab5 <- cbind(as(sigtab5, "data.frame"), as(tax_table(HC.BS.ES)[rownames(sigtab5), ], "matrix"))
+
+res6 <- results(dds6, cooksCutoff = FALSE)
+sigtab6 <- res6[which(res6$padj < alpha), ]
+sigtab6 <- cbind(as(sigtab6, "data.frame"), as(tax_table(PRNS.RS.ES)[rownames(sigtab6), ], "matrix"))
+
+res7 <- results(dds7, cooksCutoff = FALSE)
+sigtab7 <- res7[which(res7$padj < alpha), ]
+sigtab7 <- cbind(as(sigtab7, "data.frame"), as(tax_table(CINP.RS.ES)[rownames(sigtab7), ], "matrix"))
+
+res8 <- results(dds8, cooksCutoff = FALSE)
+sigtab8 <- res8[which(res8$padj < alpha), ]
+sigtab8 <- cbind(as(sigtab8, "data.frame"), as(tax_table(HC.RS.ES)[rownames(sigtab8), ], "matrix"))
+
+
+#prepare data to plot DESeq2 output
+x = tapply(sigtab$log2FoldChange, sigtab$Phylum, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Phylum = factor(as.character(sigtab$Phylum), levels=names(x))
+x = tapply(sigtab$log2FoldChange, sigtab$Genus, function(x) max(x))
+sigtab$Genus = factor(as.character(sigtab$Genus), levels=names(x))
+
+x2 = tapply(sigtab2$log2FoldChange, sigtab2$Phylum, function(x2) max(x2))
+x2 = sort(x2, TRUE)
+sigtab2$Phylum = factor(as.character(sigtab2$Phylum), levels=names(x2))
+x2 = tapply(sigtab2$log2FoldChange, sigtab2$Genus, function(x2) max(x2))
+sigtab2$Genus = factor(as.character(sigtab2$Genus), levels=names(x2))
+
+x3 = tapply(sigtab3$log2FoldChange, sigtab3$Phylum, function(x3) max(x3))
+x3 = sort(x3, TRUE)
+sigtab3$Phylum = factor(as.character(sigtab3$Phylum), levels=names(x3))
+x3 = tapply(sigtab3$log2FoldChange, sigtab3$Genus, function(x3) max(x3))
+sigtab3$Genus = factor(as.character(sigtab3$Genus), levels=names(x3))
+
+x4 = tapply(sigtab4$log2FoldChange, sigtab4$Phylum, function(x4) max(x4))
+x4 = sort(x4, TRUE)
+sigtab4$Phylum = factor(as.character(sigtab4$Phylum), levels=names(x4))
+x4 = tapply(sigtab4$log2FoldChange, sigtab4$Genus, function(x4) max(x4))
+sigtab4$Genus = factor(as.character(sigtab4$Genus), levels=names(x4))
+
+x5 = tapply(sigtab5$log2FoldChange, sigtab5$Phylum, function(x5) max(x5))
+x5 = sort(x5, TRUE)
+sigtab5$Phylum = factor(as.character(sigtab5$Phylum), levels=names(x5))
+x5 = tapply(sigtab5$log2FoldChange, sigtab5$Genus, function(x5) max(x5))
+sigtab5$Genus = factor(as.character(sigtab5$Genus), levels=names(x5))
+
+x6 = tapply(sigtab6$log2FoldChange, sigtab6$Phylum, function(x6) max(x6))
+x6 = sort(x6, TRUE)
+sigtab6$Phylum = factor(as.character(sigtab6$Phylum), levels=names(x6))
+x6 = tapply(sigtab6$log2FoldChange, sigtab6$Genus, function(x6) max(x6))
+sigtab6$Genus = factor(as.character(sigtab6$Genus), levels=names(x6))
+
+x7 = tapply(sigtab7$log2FoldChange, sigtab7$Phylum, function(x7) max(x7))
+x7 = sort(x7, TRUE)
+sigtab7$Phylum = factor(as.character(sigtab7$Phylum), levels=names(x7))
+x7 = tapply(sigtab7$log2FoldChange, sigtab7$Genus, function(x7) max(x7))
+sigtab7$Genus = factor(as.character(sigtab7$Genus), levels=names(x7))
+
+x8 = tapply(sigtab8$log2FoldChange, sigtab8$Phylum, function(x8) max(x8))
+x8 = sort(x8, TRUE)
+sigtab8$Phylum = factor(as.character(sigtab8$Phylum), levels=names(x8))
+x8 = tapply(sigtab8$log2FoldChange, sigtab8$Genus, function(x8) max(x8))
+sigtab8$Genus = factor(as.character(sigtab8$Genus), levels=names(x8))
+
+
+
+library(RColorBrewer)
+getPalette <- colorRampPalette(brewer.pal(9, "Paired"))
+colourCount = length(unique(sigtab$Phylum))
+
+
+#plot DESeq2 output w/ ggplot2 [Bulk soil vs. Endosphere]
+ggplot(sigtab, aes(x=Genus, y=log2FoldChange, color=Phylum)) + geom_point(size=4, alpha = 0.5) + theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) + theme_minimal() + coord_flip() + scale_color_manual(values = getPalette(colourCount)) + xlab("") + ylab("[Log2] Fold-Change") + theme(axis.text.y = element_text(size = 7)) + labs(title = "Differentially Abundant Bacterial Genera [Bulk soil vs. Endosphere]") + theme(plot.title = element_text(size = 10)) 
+#modified
+ggplot(sigtab, aes(x=Genus, y=log2FoldChange, color=Phylum)) + geom_point(size=5, alpha = 0.5) + theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) + theme_minimal() + coord_flip() + scale_color_manual(values = getPalette(colourCount)) + xlab("") + ylab("[Log2] Fold-Change") + theme(axis.text.y = element_text(size = 7)) + labs(title = "Differentially Abundant Bacterial Genera [Bulk soil vs. Endosphere]") + theme(plot.title = element_text(size = 10))  + theme(axis.text.y = element_text(size = 7, face="bold")) + theme(axis.text.x = element_text(size = 8, face = "bold")) + scale_x_discrete(labels = c("Aquaspirillum", "Acidibacter", "Acidicapsa", "Acidipilia", "Acidothermus", "Actinocatenispora", "Actinospica", "[Unclassified] Verrucomicrobia", "Afipia", "Aliidongia", "Rhizobium", "Aminobacter", "Amycolatopsis", "Anaeromyxobacter", "Aquisphaera", "Asanoa", "Bradyrhizobium", "Bryobacter", "Burkholderia", "Candidatus Koribacter", "Candidatus Solibacter", "Candidatus Udaeobacter", "Catenulispora", "Conexibacter", "Dongia", "Edaphobacter", "Edaphobaculum", "Frankia", "Gaiella", "Gemmata", "Gemmatimonas", "Haliangium", "Inquilinus", "[Unclassified] IS-44", "Jatrophihabitans", "Labrys", "Massila", "Mesorhizobium", "Pseudomonas sp. MND1", "Mucilaginibacter", "Mycobacterium", "Novosphingobium", "Occallatibacter", "Pseudonocardia", "Puia", "Reyranella", "Rhodanobacter", "Rhodoplanes", "Roseiarcus", "Rubrobacter", "Sphaerotilus", "Sphingomonas", "Sporocytophaga", "Streptomyces", "Terriglobus", "Tundrisphaera")) + geom_hline(yintercept=c(-2,2), linetype="dashed", color=c("blue", "red"))
+
+#PRNS [Bulk soil vs. Endosphere]
+ggplot(sigtab3, aes(x=Genus, y=log2FoldChange, color=Phylum)) + geom_point(size=2, alpha = 0.5) + geom_point(size = 3, colour ="black", pch=21) + theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) + theme_minimal() + coord_flip() + scale_color_manual(values = getPalette(colourCount)) + xlab("") + ylab("[Log2] Fold-Change") + theme(axis.text.y = element_text(size = 7)) + labs(title = "Differentially Abundant Bacterial Genera at PRNS [Bulk soil vs. Endosphere]") + theme(plot.title = element_text(size = 10))
+
+#modified
+ggplot(sigtab3, aes(x=Genus, y=log2FoldChange, color=Phylum)) + geom_point(size=4.5, alpha = 0.5)  + theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) + theme_minimal() + coord_flip() + scale_color_manual(values = getPalette(colourCount)) + xlab("") + ylab("[Log2] Fold-Change") + theme(axis.text.y = element_text(size = 7)) + labs(title = "Differentially Abundant Bacterial Genera at PRNS [Bulk soil vs. Endosphere]") + theme(plot.title = element_text(size = 10)) + theme(axis.text.y = element_text(size = 6, face = "bold.italic")) + theme(axis.text.x = element_text(size = 10, face = "bold")) + geom_hline(yintercept=c(-2,2), linetype="dashed", color=c("blue", "red")) + scale_x_discrete(labels = c("[Unclassified] Beijerinckiaceae", "Acidibacter", "Acidicaldus", "Acidicapsa", "Acidipila", "Acidocella", "Acidothermus", "Actinoplanes","Actinospica", "[Unclassified] Verrucomicrobia", "Afipia", "Aliidongia", "Rhizobium", "Aminobacter", "Amycolatopsis", "Aquisphaera", "Asticcacaulis", "Bradyrhizobium", "Bryobacter", "Burkholderia", "Candidatus Koribacter", "Candidatus Solibacter", "Candidatus Udeaobacter", "Catenulispora", "Chthoniobacter", "Collimonas", "Conexibacter", "Dactylosporangium", "Devosia", "Dongia", "Duganella", "Dyella", "Edaphobacter", "Edaphobaculum", "[Unclassified] FCPS473", "Frankia", "Gaiella", "Gemmata", "Granulicella", "Hallangium", "[Unclassified] Ktedonobacterales HSB OF53-F07", "Inquilinus", "[Unclassified] IS-44", "Jatrophihabitans", "Kutzneria", "Labrys", "Lacunisphaera", "Legionella", "Mesorhizobium", "Mucilaginibacter", "Mycobacterium", "Nevskia", "Occallatibacter", "Opitutus", "Pandoraea", "Phenylobacterium", "Pseudolabrys", "Pseudoncardia", "Puia", "Reyranella", "Rhizobacter", "Rhodanobacter", "Rhodoplanes", "Rhodovastum", "Roseiarcus", "Rudaea", "Sphaerotilus", "Sphingomonas", "Streptacidiphilus", "Streptomyces", "Terracidiphilus", "Terriglobus", "Terrimicrobium", "Terrimonas"))
+
+#CINP [Bulk soil vs. Endosphere]
+ggplot(sigtab4, aes(x=Genus, y=log2FoldChange, color=Phylum)) + geom_point(size=2, alpha = 0.5) + geom_point(size = 3, colour ="black", pch=21) + theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) + theme_minimal() + coord_flip() + scale_color_manual(values = getPalette(colourCount)) + xlab("") + ylab("[Log2] Fold-Change") + theme(axis.text.y = element_text(size = 7)) + labs(title = "Differentially Abundant Bacterial Genera at CINP [Bulk soil vs. Endosphere]") + theme(plot.title = element_text(size = 10))
+
+#modified
+ggplot(sigtab4, aes(x=Genus, y=log2FoldChange, color=Phylum)) + geom_point(size=4.5, alpha = 0.5) + theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) + theme_minimal() + coord_flip() + scale_color_manual(values = getPalette(colourCount)) + xlab("") + ylab("[Log2] Fold-Change") + theme(axis.text.y = element_text(size = 10, face = "bold.italic")) + labs(title = "Differentially Abundant Bacterial Genera at CINP [Bulk soil vs. Endosphere]") + theme(plot.title = element_text(size = 10)) + theme(axis.text.x = element_text(size = 10, face = "bold")) + geom_hline(yintercept=c(-2,2), linetype="dashed", color=c("blue", "red")) + scale_x_discrete(labels = c("Acidibacter", "Acidicapsa", "Acidipilia", "Acidothermus", "Actinoallomurus", "Actinocatenispora", "Actinoplanes", "Rhizobium", "Amycolatopsis", "Anaeromyxobacter", "Aquisphaera", "Asanoa", "Bradyrhizobium", "Bryobacter", "Candidatus Solibacter", "Candidatus Udaeobacter", "Edaphobacter", "Haliangium", "Inquilinus", "Labrys", "Massilia", "Pseudomonas sp. MND1", "Mycobacterium", "Nocardia", "Pseudolabrys", "Puia", "Acidobacteria bacterium RB41", "Shinella", "Solirubrobacter", "Sphingomonas", "Sporocytophaga", "Streptomyces", "Tundrisphaera"))
+
+#HC [Bulk soil vs. Endosphere]
+ggplot(sigtab5, aes(x=Genus, y=log2FoldChange, color=Phylum)) + geom_point(size=2, alpha = 0.5) + geom_point(size = 3, colour ="black", pch=21) + theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) + theme_minimal() + coord_flip() + scale_color_manual(values = getPalette(colourCount)) + xlab("") + ylab("[Log2] Fold-Change") + theme(axis.text.y = element_text(size = 7)) + labs(title = "Differentially Abundant Bacterial Genera at HC [Bulk soil vs. Endosphere]") + theme(plot.title = element_text(size = 10))
+
+#create a volcano plot [Bulk soil vs. Endosphere]
+deseq.resultsBE <- as.data.frame(res)
+write.csv(deseq.resultsBE, "BulkvEndo-PHC-bac.deseq.csv")
+#add OTU column title to dataframe 
+NEW <- read.csv("BulkvEndo-PHC-bac.deseqv2.csv")
+#create dataframe of subsetted phyloseq object
+Bulk_Endo_DF <- psmelt(pseq.rare.BS.ES)
+#merge dataframes based on OTU column
+df = merge(x=Bulk_Endo_DF,y=NEW,by="OTU",all.x=TRUE)
+#plot 
+ggplot(data=df, aes(x=log2FoldChange, y=-log10(pvalue), col=Compartment, label="")) + geom_point() + theme_minimal() + geom_text() + geom_vline(xintercept=c(-0.6, 0.6), col="red") + geom_hline(yintercept=-log10(0.05), col="red") + scale_color_brewer(palette = "Set1") + xlab("[Log2] Fold-Change") + ylab("[-Log10] p-value")
+
+#plotting for Rhizosphere vs. Endosphere
+getPalette <- colorRampPalette(brewer.pal(9, "Paired"))
+colourCount = length(unique(sigtab2$Phylum))
+
+#plot DESeq2 output w/ ggplot2 [Rhizosphere vs. Endosphere]
+ggplot(sigtab3, aes(x=Genus, y=log2FoldChange, color=Phylum)) + geom_point(size=7, alpha = 0.5) + theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) + theme_minimal() + coord_flip() + scale_color_manual(values = getPalette(colourCount)) + xlab("") + ylab("[Log2] Fold-Change") + theme(axis.text.y = element_text(size = 7)) + labs(title = "Differentially Abundant Bacterial Genera [Rhizosphere vs. Endosphere]")
+
+#create a volcano plot [Rhizosphere vs. Endosphere]
+deseq.resultsRE <- as.data.frame(res2)
+write.csv(deseq.resultsRE, "RhizovEndo-PHC-bac.deseq.csv")
+#add OTU column title to dataframe 
+NEW2 <- read.csv("RhizovEndo-PHC-bac.deseqv2.csv")
+#create dataframe of subsetted phyloseq object
+Rhizo_Endo_DF <- psmelt(Rhizo_Endo)
+#merge dataframes based on OTU column
+df2 = merge(x=Rhizo_Endo_DF,y=NEW,by="OTU",all.x=TRUE)
+#plot 
+ggplot(data=df2, aes(x=log2FoldChange, y=-log10(pvalue), col=Compartment, label="")) + geom_point() + theme_minimal() + geom_text() + geom_vline(xintercept=c(-0.6, 0.6), col="red") + geom_hline(yintercept=-log10(0.05), col="red")
+
+#export DESeq2 table of significant OTUs differentially abundant based on compartment
+write.csv(sigtab, "SigTaxa_DESeq2_PHC_Bacteria.csv") #Bulk soil vs. Endosphere
+wwite.csv(sigtab2, "SigTaxa_DESeq2_PHC_RhizovsEndo_Bacteria.csv") #Rhizo vs. Endo
+
+```
+
+```{FAPROTAX}
+
+#Python using Windows PowerShell
+##FAPROTAX
+python collapse_table.py -i faprotax.taxon.table.tsv -o functional_table.tsv -g FAPROTAX.txt -c "#" -d taxonomy --omit_columns 0 --row_names_are_in taxonomy -r report.txt -n columns_after_collapsing -v -s out_subtables/ -f
+
+otu.function.table <- read.table("functional_table.tsv", sep="\t", header=TRUE, row.names=1)
+
+rel.otu.fn.df <- data.frame(otu.function.table)
+rel.otu.fn.df$BioFunction = row.names(rel.otu.fn.df)
+otu.melt <- melt(rel.otu.fn.df, id.vars = "BioFunction")
+DFsub <- subset(otu.melt, value > 0)
+write.csv(DFsub, "OTU_Melt_Trim2.Rare.csv")
+COMP <- read.csv("OTU_Melt_Trim2.Rare.csv")
+
+
+#plot
+ggplot(Comp[which(Comp$Count > 0),], aes(x=Compartment, y=BioFunction)) + geom_point(aes(colour= Compartment, size = Count)) + theme(axis.text.x = element_blank()) + ylab("") + theme_minimal() + xlab("") + scale_color_manual(values = wes_palette("Moonrise2", n=3)) + theme(axis.text.x = element_text(size = 10, face = "bold", angle = 45, vjust = 1, hjust = 1)) + theme(axis.text.y = element_text(size = 10, face = "bold")) + scale_y_discrete(labels = c("Aerobic Ammonia Oxidation", "Aerobic Chemoheterotrophy", "Aerobic Nitrite Oxidation", "Aliphatic Non-Methane Hydrocarbon Degradation", "Animal Parasites or Symbionts", "Anoxygenic Photoautotrophy", "Anoxygenic Photoautotrophy S Oxidizing", "Aromatic Compound Degradation", "Aromatic Hydrocarbon Degradtaion", "Cellulolysis", "Chemoheterotrophy", "Chitinolysis", "Dentrification", "Fermentation", "Human-Associated", "Human Pathogens", "Hydrocarbon Degradation", "Intracellular Parasites", "Iron Respiration", "Manganese Oxidation", "Methanol Oxidation", "Methanotrophy", "Methylotrophy", "Nitrate Dentrification", "Nitrate Reduction", "Nitrate Respiration","Nitrification", "Nitrite Dentrification", "Nitrite Respiration", "Nitrogen Fixation", "Nitrogen Respiration", "Nitrous Oxide Denitrification", "Non-Photosynthetic Cyanobacteria", "Photoautotrophy", "Photoheterotrophy", "Phototrophy", "Predatory or Exoparasitic", "Ureolysis", "Xylanolysis"))
+
+
+#comparing BioFunctions across regions and compartments [Welch's t-tests]
+
+CelluENDO <- subset(Comp, Compartment == "Endosphere" & BioFunction == "cellulolysis")
+CelluBULK <- subset(Comp, Compartment == "Bulk soil" & BioFunction == "cellulolysis")
+CelluRhizo <- subset(Comp, BioFunction == "cellulolysis" & Compartment == "Rhizosphere")
+t.test(CelluENDO$Count, CelluBULK$Count)
+
+###Welch Two Sample t-test
+
+data:  CelluENDO$Count and CelluBULK$Count
+t = 2.9659, df = 97.023, p-value = 0.0038
+alternative hypothesis: true difference in means is not equal to 0
+95 percent confidence interval:
+ 0.01223172 0.06171762
+sample estimates:
+ mean of x  mean of y 
+0.09391094 0.05693627
+
+t.test(CelluENDO$Count, CelluRhizo$Count)
+
+### Welch Two Sample t-test
+
+data:  CelluENDO$Count and CelluRhizo$Count
+t = 2.7795, df = 109.4, p-value = 0.00641
+alternative hypothesis: true difference in means is not equal to 0
+95 percent confidence interval:
+ 0.01039313 0.06203971
+sample estimates:
+ mean of x  mean of y 
+0.09391094 0.05769451
+
+###
+
+CelluENDOPRNS <- subset(Comp, BioFunction == "cellulolysis" & Compartment == "Endosphere" & Region == "PRNS")
+CelluBULKPRNS <- subset(Comp, BioFunction == "cellulolysis" & Compartment == "Bulk soil" & Region == "PRNS")
+t.test(CelluENDOPRNS$Count, CelluBULKPRNS$Count)
+
+###Welch Two Sample t-test
+
+data:  CelluENDOPRNS$Count and CelluBULKPRNS$Count
+t = -2.618, df = 21.222, p-value = 0.01598
+alternative hypothesis: true difference in means is not equal to 0
+95 percent confidence interval:
+ -0.045821814 -0.005266381
+sample estimates:
+mean of x mean of y 
+0.0272028 0.0527469 
+
+###
+
+Celluloysis <- subset(Comp, BioFunction == "cellulolysis")
+CelluENDOHC <- subset(Comp, Compartment == "Endosphere" & BioFunction == "cellulolysis" & Region == "HC")
+CelluBulkHC <- subset(Comp, Compartment == "Bulk soil" & BioFunction == "cellulolysis" & Region == "HC")
+
+t.test(CelluENDOHC$Count, CelluBulkHC$Count)
+
+###	Welch Two Sample t-test
+
+data:  CelluENDOHC$Count and CelluBulkHC$Count
+t = 9.4433, df = 46.817, p-value = 2.045e-12
+alternative hypothesis: true difference in means is not equal to 0
+95 percent confidence interval:
+ 0.08708283 0.13423620
+sample estimates:
+ mean of x  mean of y 
+0.20507829 0.09441878
+
+###
+
+NFendo <- subset(Comp, BioFunction == "nitrogen_fixation" & Compartment == "Endosphere")
+NFbulk <- subset(Comp, BioFunction == "nitrogen_fixation" & Compartment == "Bulk soil")
+t.test(NFendo$Count, NFbulk$Count)
+
+### Welch Two Sample t-test
+
+data:  NFendo$Count and NFbulk$Count
+t = -2.356, df = 111.27, p-value = 0.02022
+alternative hypothesis: true difference in means is not equal to 0
+95 percent confidence interval:
+ -0.022098932 -0.001907946
+sample estimates:
+ mean of x  mean of y 
+0.03426182 0.04626526 
+
+###
+
+NFrhizo <- subset(Comp, BioFunction == "nitrogen_fixation" &  Compartment == "Rhizosphere")
+t.test(NFendo$Count, NFrhizo$Count)
+
+### Welch Two Sample t-test
+
+data:  NFendo$Count and NFrhizo$Count
+t = -1.6741, df = 100.61, p-value = 0.09722
+alternative hypothesis: true difference in means is not equal to 0
+95 percent confidence interval:
+ -0.019244649  0.001629462
+sample estimates:
+ mean of x  mean of y 
+0.03426182 0.04306942 
+
+###
+
+t.test(NFbulk$Count, NFrhizo$Count)
+
+###	Welch Two Sample t-test
+
+data:  NFbulk$Count and NFrhizo$Count
+t = 0.5252, df = 118.07, p-value = 0.6004
+alternative hypothesis: true difference in means is not equal to 0
+95 percent confidence interval:
+ -0.008854097  0.015245788
+sample estimates:
+ mean of x  mean of y 
+0.04626526 0.04306942 
+
+###
+
+PRNS_Nitrogen <- subset(Comp, BioFunction == "nitrogen_fixation" | BioFunction == "nitrous_oxide_denitrification" | BioFunction == "nitrogen_respiration" | BioFunction == "nitrite_denitrification" | BioFunction == "nitrite_respiration" | BioFunction == "nitrate_denitrification" | BioFunction == "nitrification" | BioFunction == "nitrate_respiration" | BioFunction == "nitrate_reduction" | BioFunction == "aerobic_nitrite_oxidation")
+PRNS_Nitrogen <- subset(PRNS_Nitrogen, Region == "PRNS")
+CINP_Nitrogen <- subset(Comp, BioFunction == "nitrogen_fixation" | BioFunction == "nitrous_oxide_denitrification" | BioFunction == "nitrogen_respiration" | BioFunction == "nitrite_denitrification" | BioFunction == "nitrite_respiration" | BioFunction == "nitrate_denitrification" | BioFunction == "nitrification" | BioFunction == "nitrate_respiration" | BioFunction == "nitrate_reduction" | BioFunction == "aerobic_nitrite_oxidation")
+CINP_Nitrogen <- subset(Comp, Region == "CINP")
+HC_Nitrogen <- subset(Comp, BioFunction == "nitrogen_fixation" | BioFunction == "nitrous_oxide_denitrification" | BioFunction == "nitrogen_respiration" | BioFunction == "nitrite_denitrification" | BioFunction == "nitrite_respiration" | BioFunction == "nitrate_denitrification" | BioFunction == "nitrification" | BioFunction == "nitrate_respiration" | BioFunction == "nitrate_reduction" | BioFunction == "aerobic_nitrite_oxidation")
+HC_Nitrogen <- subset(Comp, Region == "HC")
+t.test(PRNS_Nitrogen$Count, CINP_Nitrogen$Count)
+
+###	Welch Two Sample t-test
+
+data:  PRNS_Nitrogen$Count and CINP_Nitrogen$Count
+t = -7.7511, df = 2028.3, p-value = 1.43e-14
+alternative hypothesis: true difference in means is not equal to 0
+95 percent confidence interval:
+ -0.02702376 -0.01611024
+sample estimates:
+mean of x mean of y 
+ 0.022202  0.043769 
+
+###
+ 
+t.test(PRNS_Nitrogen$Count, HC_Nitrogen$Count)
+
+###	Welch Two Sample t-test
+
+data:  PRNS_Nitrogen$Count and HC_Nitrogen$Count
+t = -12.085, df = 1455.1, p-value < 2.2e-16
+alternative hypothesis: true difference in means is not equal to 0
+95 percent confidence interval:
+ -0.05105718 -0.03679690
+sample estimates:
+ mean of x  mean of y 
+0.02220200 0.06612903 
+
+###
+
+t.test(CINP_Nitrogen$Count, HC_Nitrogen$Count)
+
+### Welch Two Sample t-test
+
+data:  CINP_Nitrogen$Count and HC_Nitrogen$Count
+t = -5.1914, df = 2415.9, p-value = 2.262e-07
+alternative hypothesis: true difference in means is not equal to 0
+95 percent confidence interval:
+ -0.03080616 -0.01391391
+sample estimates:
+ mean of x  mean of y 
+0.04376900 0.06612903 
+
+NIT <- subset(Comp, BioFunction == "nitrification")
+t.test(CelluBULK$Count, CelluENDO$Count)
+
+###	Welch Two Sample t-test
+
+data:  CelluBULK$Count and CelluENDO$Count
+t = -2.9659, df = 97.023, p-value = 0.0038
+alternative hypothesis: true difference in means is not equal to 0
+95 percent confidence interval:
+ -0.06171762 -0.01223172
+sample estimates:
+ mean of x  mean of y 
+0.05693627 0.09391094 
+
+t.test(NFendo$Count, NFrhizo$Count)
+
+###	Welch Two Sample t-test
+
+data:  NFendo$Count and NFrhizo$Count
+t = -1.6741, df = 100.61, p-value = 0.09722
+alternative hypothesis: true difference in means is not equal to 0
+95 percent confidence interval:
+ -0.019244649  0.001629462
+sample estimates:
+ mean of x  mean of y 
+0.03426182 0.04306942 
+
+Ferm <- subset(Comp, BioFunction == "fermentation")
+FermENDO <- subset(Ferm, Compartment == "Endosphere")
+FermRhizo <- subset(Ferm, Compartment == "Rhizosphere")
+FermBULK <- subset(Ferm, Compartment == "Bulk soil")
+t.test(FermENDO$Count, FermBULK$Count)
+
+###	Welch Two Sample t-test
+
+data:  FermENDO$Count and FermBULK$Count
+t = -3.7912, df = 68.75, p-value = 0.0003184
+alternative hypothesis: true difference in means is not equal to 0
+95 percent confidence interval:
+ -0.015928850 -0.004944561
+sample estimates:
+ mean of x  mean of y 
+0.00463774 0.01507445 
+
+t.test(FermENDO$Count, FermRhizo$Count)
+
+###	Welch Two Sample t-test
+
+data:  FermENDO$Count and FermRhizo$Count
+t = -4.6512, df = 55.532, p-value = 2.084e-05
+alternative hypothesis: true difference in means is not equal to 0
+95 percent confidence interval:
+ -0.02676410 -0.01064798
+sample estimates:
+ mean of x  mean of y 
+0.00463774 0.02334378 
+
+###
+
+t.test(FermBULK$Count, FermRhizo$Count)
+
+###	Welch Two Sample t-test
+
+data:  FermBULK$Count and FermRhizo$Count
+t = -1.7746, df = 85.743, p-value = 0.07952
+alternative hypothesis: true difference in means is not equal to 0
+95 percent confidence interval:
+ -0.0175332848  0.0009946143
+sample estimates:
+ mean of x  mean of y 
+0.01507445 0.02334378 
+
+###
+
+Nitrogen <- subset(Comp, BioFunction == "nitrogen_fixation" | BioFunction == "nitrous_oxide_denitrification" | BioFunction == "nitrogen_respiration" | BioFunction == "nitrite_denitrification" | BioFunction == "nitrite_respiration" | BioFunction == "nitrate_denitrification" | BioFunction == "nitrification" | BioFunction == "nitrate_respiration" | BioFunction == "nitrate_reduction" | BioFunction == "aerobic_nitrite_oxidation")
+Nendo <- subset(Nitrogen, Compartment == "Endosphere")
+Nrhizo <- subset(Nitrogen, Compartment == "Rhizosphere")
+Nbulk <- subset(Nitrogen, Compartment == "Bulk soil")
+
+###
+
+t.test(Nendo$Count, Nbulk$Count)
+
+###	Welch Two Sample t-test
+
+data:  Nendo$Count and Nbulk$Count
+t = -3.7278, df = 798.42, p-value = 0.0002068
+alternative hypothesis: true difference in means is not equal to 0
+95 percent confidence interval:
+ -0.007277669 -0.002257006
+sample estimates:
+ mean of x  mean of y 
+0.01375694 0.01852427 
+
+###
+
+t.test(Nrhizo$Count, Nbulk$Count)
+
+###	Welch Two Sample t-test
+
+data:  Nrhizo$Count and Nbulk$Count
+t = 1.0566, df = 731.94, p-value = 0.291
+alternative hypothesis: true difference in means is not equal to 0
+95 percent confidence interval:
+ -0.001424381  0.004744561
+sample estimates:
+ mean of x  mean of y 
+0.02018436 0.01852427 
+
+###
+
+t.test(Nrhizo$Count, Nendo$Count)
+
+###	Welch Two Sample t-test
+
+data:  Nrhizo$Count and Nendo$Count
+t = 4.4944, df = 612.82, p-value = 8.342e-06
+alternative hypothesis: true difference in means is not equal to 0
+95 percent confidence interval:
+ 0.003618945 0.009235910
+sample estimates:
+ mean of x  mean of y 
+0.02018436 0.01375694 
+
+#link taxa to function using subtables from FAPROTAX [Found in Report2.txt]
+TFAX <- read.csv("FAPROTAX_FUNC_TAXA.csv")
+
+#test plot
+
+###additional comparisons
+COMP_Cell <- subset(COMP, BioFunction == "cellulolysis")
+NFix <- subset(COMP, BioFunction == "nitrogen_fixation")
+
+ggplot(COMP_Cell, aes(fill=Compartment, y=Count, x=Compartment)) + geom_boxplot() + geom_jitter(width = 0.1) + theme_bw() + ylab("Cellulolysis BioFunction (%)") + theme(axis.title.y = element_text(face = "bold", size = 14, vjust = 2)) + theme(axis.text.y = element_text(size = 12, face = "bold")) + xlab("") + theme(axis.text.x = element_text(face = "bold", size = 12, angle = 45, hjust = 1)) + theme(legend.position = "none") + scale_fill_manual(values = wes_palette("GrandBudapest1", n=3)) + scale_y_continuous(labels = scales::percent) + stat_compare_means(comparisons = my_comparisons, label = "p.signif") + facet_grid(~Region) + theme(strip.text = element_text(size = 14, face = "bold"))
+#save
+ggsave(
+    filename = "PHC_FAPR_Cellulolysis.Box.png",
+    plot = last_plot(),
+    device = NULL,
+    path = NULL,
+    scale = 1,
+    width = 4,
+    height = 5,
+    units = c("in"),
+    dpi = 300)
+
+#N fixation
+ggplot(NFix, aes(fill=Compartment, y=Count, x=Compartment)) + geom_boxplot() + geom_jitter(width = 0.1) + theme_bw() + ylab("Nitrogen Fixation BioFunction (%)") + theme(axis.title.y = element_text(face = "bold", size = 14, vjust = 2)) + theme(axis.text.y = element_text(size = 12, face = "bold")) + xlab("") + theme(axis.text.x = element_text(face = "bold", size = 12, angle = 45, hjust = 1)) + theme(legend.position = "none") + scale_fill_manual(values = wes_palette("GrandBudapest1", n=3)) + scale_y_continuous(labels = scales::percent) + stat_compare_means(comparisons = my_comparisons, label = "p.signif") + facet_grid(~Region) + theme(strip.text = element_text(size = 14, face = "bold"))
+#save
+ggsave(
+    filename = "PHC_FAPR_NFIX.Box.png",
+    plot = last_plot(),
+    device = NULL,
+    path = NULL,
+    scale = 1,
+    width = 4,
+    height = 5,
+    units = c("in"),
+    dpi = 300)
+#total nitrogen
+Nitrogen <- subset(COMP, BioFunction == "nitrous_oxide_denitrification" | BioFunction == "nitrogen_respiration" | BioFunction == "nitrite_denitrification" | BioFunction == "nitrite_respiration" | BioFunction == "nitrate_denitrification" | BioFunction == "nitrification" | BioFunction == "nitrate_respiration" | BioFunction == "nitrate_reduction" | BioFunction == "aerobic_nitrite_oxidation")
+#prune outlier
+NITRO <- subset(Nitrogen2, Count > 0.075)
+ggplot(NITRO, aes(fill=Compartment, y=Count, x=Compartment)) + geom_boxplot() + geom_jitter(width = 0.1) + theme_bw() + ylab("Nitrogen Metabolism BioFunction (%)") + theme(axis.title.y = element_text(face = "bold", size = 14, vjust = 2)) + theme(axis.text.y = element_text(size = 12, face = "bold")) + xlab("") + theme(axis.text.x = element_text(face = "bold", size = 12, angle = 45, hjust = 1)) + theme(legend.position = "none") + scale_fill_manual(values = wes_palette("GrandBudapest1", n=3)) + stat_compare_means(comparisons = my_comparisons, label = "p.signif") + facet_grid(~Region) + theme(strip.text = element_text(size = 14, face = "bold")) + scale_y_continuous(labels = scales::percent)
+#save
+ggsave(
+    filename = "PHC_FAPR_Nitrogen.Box.png",
+    plot = last_plot(),
+    device = NULL,
+    path = NULL,
+    scale = 1,
+    width = 4,
+    height = 5,
+    units = c("in"),
+    dpi = 300)
+
+#methanotrophy
+MET <- subset(COMP, BioFunction == "methanotrophy")
+ggplot(MET, aes(fill=Compartment, y=Count, x=Compartment)) + geom_boxplot() + geom_jitter(width = 0.1) + theme_bw() + ylab("Methanotrophy BioFunction (%)") + theme(axis.title.y = element_text(face = "bold", size = 14, vjust = 2)) + theme(axis.text.y = element_text(size = 12, face = "bold")) + xlab("") + theme(axis.text.x = element_text(face = "bold", size = 12, angle = 45, hjust = 1)) + theme(legend.position = "none") + scale_fill_manual(values = wes_palette("GrandBudapest1", n=3)) + stat_compare_means(comparisons = my_comparisons, label = "p.signif") + facet_grid(~Region) + theme(strip.text = element_text(size = 14, face = "bold")) + scale_y_continuous(labels = scales::percent)
+#save
+ggsave(
+     filename = "PHC_FAPR_Methanotrophy.Box.png",
+     plot = last_plot(),
+     device = NULL,
+     path = NULL,
+     scale = 1,
+     width = 4,
+     height = 5,
+     units = c("in"),
+     dpi = 300)
+
+#aggregated cellulolysis by region
+ggplot(COMP_Cell, aes(fill=Region, y=Count, x=Region)) + geom_boxplot() + geom_jitter(width = 0.1) + theme_bw() + ylab("Cellulolysis BioFunction (%)") + theme(axis.title.y = element_text(face = "bold", size = 14, vjust = 2)) + theme(axis.text.y = element_text(size = 12, face = "bold")) + xlab("") + theme(axis.text.x = element_text(face = "bold", size = 12, angle = 45, hjust = 1)) + theme(legend.position = "none") + scale_fill_manual(values = wes_palette("Darjeeling1", n=3)) + stat_compare_means(comparisons = my_comparisons2, label = "p.signif") + theme(strip.text = element_text(size = 14, face = "bold")) + scale_y_continuous(labels = scales::percent)
+#save
+ggsave(
+    filename = "PHC_FAPR_Methanotrophy.allRegions.Box.png",
+    plot = last_plot(),
+    device = NULL,
+    path = NULL,
+    scale = 1,
+    width = 3,
+    height = 5,
+    units = c("in"),
+    dpi = 300)
+
+#aggregated nitrogen fixation
+ggplot(NFix, aes(fill=Region, y=Count, x=Region)) + geom_boxplot() + geom_jitter(width = 0.1) + theme_bw() + ylab("Nitrogen Fixation BioFunction (%)") + theme(axis.title.y = element_text(face = "bold", size = 14, vjust = 2)) + theme(axis.text.y = element_text(size = 12, face = "bold")) + xlab("") + theme(axis.text.x = element_text(face = "bold", size = 12, angle = 45, hjust = 1)) + theme(legend.position = "none") + scale_fill_manual(values = wes_palette("Darjeeling1", n=3)) + stat_compare_means(comparisons = my_comparisons2, label = "p.signif") + theme(strip.text = element_text(size = 14, face = "bold")) + scale_y_continuous(labels = scales::percent)
+#save
+ggsave(
+    filename = "PHC_FAPR_NitrogenFIX.allRegions.Box.png",
+    plot = last_plot(),
+    device = NULL,
+    path = NULL,
+    scale = 1,
+    width = 2,
+    height = 4,
+    units = c("in"),
+    dpi = 300)
+#aggregated nitogen cycling
+ggplot(NITRO, aes(fill=Region, y=Count, x=Region)) + geom_boxplot() + geom_jitter(width = 0.1) + theme_bw() + ylab("Nitrogen Metabolism BioFunction (%)") + theme(axis.title.y = element_text(face = "bold", size = 14, vjust = 2)) + theme(axis.text.y = element_text(size = 12, face = "bold")) + xlab("") + theme(axis.text.x = element_text(face = "bold", size = 12, angle = 45, hjust = 1)) + theme(legend.position = "none") + scale_fill_manual(values = wes_palette("Darjeeling1", n=3)) + stat_compare_means(comparisons = my_comparisons2, label = "p.signif") + theme(strip.text = element_text(size = 14, face = "bold")) + scale_y_continuous(labels = scales::percent)
+#save
+ggsave(
+    filename = "PHC_FAPR_Nitrogen.allRegions.Box.png",
+    plot = last_plot(),
+    device = NULL,
+    path = NULL,
+    scale = 1,
+    width = 2,
+    height = 4,
+    units = c("in"),
+    dpi = 300)
+
+#aggregated methanotrophy
+ggplot(MET, aes(fill=Region, y=Count, x=Region)) + geom_boxplot() + geom_jitter(width = 0.1) + theme_bw() + ylab("Methanotrophy BioFunction (%)") + theme(axis.title.y = element_text(face = "bold", size = 14, vjust = 2)) + theme(axis.text.y = element_text(size = 12, face = "bold")) + xlab("") + theme(axis.text.x = element_text(face = "bold", size = 12, angle = 45, hjust = 1)) + theme(legend.position = "none") + scale_fill_manual(values = wes_palette("Darjeeling1", n=3)) + stat_compare_means(comparisons = my_comparisons2, label = "p.signif") + theme(strip.text = element_text(size = 14, face = "bold")) + scale_y_continuous(labels = scales::percent)
+#save
+ggsave(
+    filename = "PHC_FAPR_METH.allRegions.Box.png",
+    plot = last_plot(),
+    device = NULL,
+    path = NULL,
+    scale = 1,
+    width = 2,
+    height = 4,
+    units = c("in"),
+    dpi = 300)
+
+```
+
+```{Soil Chemistry Data}
+
+SoilData <- read.csv("Soil_Chem_Data.csv")
+
+#anova test on pH
+res_aov <- aov(pH ~ Sample.Location, data = SoilData)
+summary(res_aov)
+
+#check normality
+shapiro.test(res_aov$residuals)
+
+# histogram
+hist(res_aov$residuals)
+
+# QQ-plot
+library(car)
+qqPlot(res_aov$residuals,
+  id = FALSE # id = FALSE to remove point identification
+)
+
+library(rstatix)
+
+#stats + plots
+stat.test <- SoilData %>% t_test(pH ~ Sample.Location)
+plot2 <- ggboxplot(SoilData, x = "Sample.Location", y = "pH", color = "Sample.Location", legend = "none", add = "jitter") + theme(axis.title.x = element_blank()) + theme(axis.text.x = element_text(face = "bold", size = 14)) + theme(axis.text.y = element_text(size = 14)) + theme(axis.title.y = element_text(size = 16, face = "bold")) + scale_color_manual(values = wes_palette("Darjeeling1"))
+
+stat.test <- stat.test %>% add_xy_position(x = "Sample.Location")
+plot2 + stat_pvalue_manual(stat.test, label = "p.adj.signif", tip.length = 0.01, y.position = c(5.8, 6.9, 6.7))
+
+ggsave(
+ "PHC_Soil_pH.png",
+    plot = last_plot(),
+    device = NULL,
+    path = NULL,
+    scale = 1,
+    width = 2.5,
+    height = 4,
+    units = c("in"),
+    dpi = 300)
+
+#anova test on organic matter
+res_aov2 <- aov(Organic.Matter$Sample.Location, data = SoilData)
+
+#check normality
+shapiro.test(res_aov$residuals)
+
+# histogram
+hist(res_aov$residuals)
+
+# QQ-plot
+library(car)
+qqPlot(res_aov$residuals,
+  id = FALSE # id = FALSE to remove point identification
+)
+
+#stats + plots
+stat.test <- SoilData %>% t_test(pH ~ Sample.Location)
+plot2 <- ggboxplot(SoilData, x = "Sample.Location", y = "pH", color = "Sample.Location", legend = "none", add = "jitter") + theme(axis.title.x = element_blank()) + theme(axis.text.x = element_text(face = "bold", size = 14)) + theme(axis.text.y = element_text(size = 14)) + theme(axis.title.y = element_text(size = 16, face = "bold")) + scale_color_manual(values = wes_palette("Darjeeling1"))
+
+#remove outliers
+subset_OM <- subset(SoilData, Organic.Matter < 40)
+
+#plot
+plot3 <- ggboxplot(subset_OM, x = "Sample.Location", y = "Organic.Matter", color = "Sample.Location", legend = "none", add = "jitter") + theme(axis.title.x = element_blank()) + theme(axis.text.x = element_text(face = "bold", size = 14)) + theme(axis.text.y = element_text(size = 14)) + theme(axis.title.y = element_text(size = 16, face = "bold")) + scale_color_manual(values = wes_palette("Darjeeling1")) + ylab("Organic Matter")
+
+#stats added
+stat.test2 <- stat.test2 %>% add_xy_position(x = "Sample.Location")
+plot3 + stat_pvalue_manual(stat.test2, label = "p.adj.signif", tip.length = 0.01, y.position = c(35, 38, 16))
+
+#save
+ggsave(
+     "PHC_Soil_Organic-Matter.png",
+     plot = last_plot(),
+     device = NULL,
+     path = NULL,
+     scale = 1,
+     width = 2.5,
+     height = 4,
+     units = c("in"),
+     dpi = 300)
+
+#anova on total exchange capacity
+res_aov3 <- aov(Total.Exchange.Capacity ~ Sample.Location, data = SoilData)
+
+summary(res_aov3)
+
+#normality tests
+shapiro.test(res_aov3$residuals)
+hist(res_aov3$residuals)
+
+stat.test3 <- SoilData %>% t_test(Total.Exchange.Capacity ~ Sample.Location)
+
+#plot
+TECplot <- ggboxplot(SoilData, x = "Sample.Location", y = "Total.Exchange.Capacity", color = "Sample.Location", legend = "none", add = "jitter") + theme(axis.title.x = element_blank()) + theme(axis.text.x = element_text(face = "bold", size = 14)) + theme(axis.text.y = element_text(size = 14)) + theme(axis.title.y = element_text(size = 16, face = "bold")) + scale_color_manual(values = wes_palette("Darjeeling1")) + ylab("Total Exchange Capacity")
+
+stat.test3 <- stat.test3 %>% add_xy_position(x = "Sample.Location")
+TECplot + stat_pvalue_manual(stat.test3, label = "p.adj.signif", tip.length = 0.01, y.position = c(23, 30, 28))
+#save
+ggsave(
+     "PHC_Soil_Total-Exchange-Capacity.png",
+     plot = last_plot(),
+     device = NULL,
+     path = NULL,
+     scale = 1,
+     width = 2.5,
+     height = 4,
+     units = c("in"),
+     dpi = 300)
+
+#anova on calcium 
+
+res_aov4 <- aov(Ca ~ Sample.Location, data = SoilData)
+
+#normality tests
+shapiro.test(res_aov4$residuals)
+hist(res_aov4$residuals)
+
+CAplot <- ggboxplot(SoilData, x = "Sample.Location", y = "Ca", color = "Sample.Location", legend = "none", add = "jitter") + theme(axis.title.x = element_blank()) + theme(axis.text.x = element_text(face = "bold", size = 14)) + theme(axis.text.y = element_text(size = 14)) + theme(axis.title.y = element_text(size = 16, face = "bold")) + scale_color_manual(values = wes_palette("Darjeeling1")) + ylab("Calcium")
+
+#remove outliers
+Ca_no_outlier <- subset(SoilData, Ca < 1300)
+#test normality again
+shapiro.test(res_aov4$residuals)
+
+#stats
+stat.test4 <- Ca_no_outlier %>% t_test(Ca ~ Sample.Location)
+
+#plot
+CAplot <- ggboxplot(Ca_no_outlier, x = "Sample.Location", y = "Ca", color = "Sample.Location", legend = "none", add = "jitter") + theme(axis.title.x = element_blank()) + theme(axis.text.x = element_text(face = "bold", size = 14)) + theme(axis.text.y = element_text(size = 14)) + theme(axis.title.y = element_text(size = 16, face = "bold")) + scale_color_manual(values = wes_palette("Darjeeling1")) + ylab("Calcium")
+
+#stats + plot + save
+stat.test4 <- stat.test4 %>% add_xy_position(x = "Sample.Location")
+CAplot + stat_pvalue_manual(stat.test4, label = "p.adj.signif", tip.length = 0.01, y.position = c(1150, 1290, 1280))
+CAplot + stat_pvalue_manual(stat.test4, label = "p.adj.signif", tip.length = 0.01, y.position = c(1150, 1400, 1350))
+ggsave(
+     "PHC_Soil_Calcium.png",
+     plot = last_plot(),
+     device = NULL,
+     path = NULL,
+     scale = 1,
+     width = 2.5,
+     height = 4,
+     units = c("in"),
+     dpi = 300)
+
+#anova with magnesium
+res_aov5 <- aov(Mg ~ Sample.Location, data = SoilData)
+
+#normality tests
+shapiro.test(res_aov5$residuals)
+hist(res_aov5$residuals)
+
+#plot
+Mgplot <- ggboxplot(SoilData, x = "Sample.Location", y = "Mg", color = "Sample.Location", legend = "none", add = "jitter") + theme(axis.title.x = element_blank()) + theme(axis.text.x = element_text(face = "bold", size = 14)) + theme(axis.text.y = element_text(size = 14)) + theme(axis.title.y = element_text(size = 16, face = "bold")) + scale_color_manual(values = wes_palette("Darjeeling1")) + ylab("Magnesium")
+
+stat.test5 <- SoilData %>% t_test(Mg ~ Sample.Location)
+stat.test5 <- stat.test5 %>% add_xy_position(x = "Sample.Location")
+
+stat.test5 <- stat.test5 %>% add_xy_position(x = "Sample.Location")
+ Mgplot + stat_pvalue_manual(stat.test5, label = "p.adj.signif", tip.length = 0.01, y.position = c(700, 1600, 1550))
+ #save
+ ggsave(
+     "PHC_Soil_Magnesium.png",
+     plot = last_plot(),
+     device = NULL,
+     path = NULL,
+     scale = 1,
+     width = 2.5,
+     height = 4,
+     units = c("in"),
+     dpi = 300)
+
+#anova with phosphorus
+ 
+res_aov6 <- aov(P ~ Sample.Location, data = SoilData)
+
+#normality test
+shapiro.test(res_aov6$residuals)
+hist(res_aov6$residuals)
+
+#remove outliers + test again
+P_subset <- subset(SoilData, P < 20)
+
+res_aov6 <- aov(P ~ Sample.Location, data = P_subset)
+shapiro.test(res_aov6$residuals)
+
+#plot 
+Pplot <- ggboxplot(P_subset, x = "Sample.Location", y = "P", color = "Sample.Location", legend = "none", add = "jitter") + theme(axis.title.x = element_blank()) + theme(axis.text.x = element_text(face = "bold", size = 14)) + theme(axis.text.y = element_text(size = 14)) + theme(axis.title.y = element_text(size = 16, face = "bold")) + scale_color_manual(values = wes_palette("Darjeeling1")) + ylab("Phosphorus")
+
+#stats
+stat.test6 <- P_subset %>% t_test(P ~ Sample.Location)
+stat.test6 <- stat.test6 %>% add_xy_position(x = "Sample.Location")
+
+#stats + plot + save
+Pplot + stat_pvalue_manual(stat.test6, label = "p.adj.signif", tip.length = 0.01, y.position = c(20, 25, 20))
+
+ggsave(
+     "PHC_Soil_Phosphorus.png",
+     plot = last_plot(),
+     device = NULL,
+     path = NULL,
+     scale = 1,
+     width = 2.5,
+     height = 4,
+     units = c("in"),
+     dpi = 300)
+
+#anova with potassium
+res_aov7 <- aov(K ~ Sample.Location, data = SoilData)
+
+#normality tests
+shapiro.test(res_aov7$residuals)
+hist(res_aov7$residuals)
+
+#remove outliers
+K_subset <- subset(SoilData, K < 150)
+
+#test again
+res_aov7 <- aov(K ~ Sample.Location, data = K_subset)
+shapiro.test(res_aov7$residuals)
+hist(res_aov7$residuals)
+
+#plot 
+Kplot <- ggboxplot(K_subset, x = "Sample.Location", y = "K", color = "Sample.Location", legend = "none", add = "jitter") + theme(axis.title.x = element_blank()) + theme(axis.text.x = element_text(face = "bold", size = 14)) + theme(axis.text.y = element_text(size = 14)) + theme(axis.title.y = element_text(size = 16, face = "bold")) + scale_color_manual(values = wes_palette("Darjeeling1")) + ylab("Potassium")
+
+#stats
+stat.test7 <- K_subset %>% t_test(K ~ Sample.Location)
+stat.test7 <- stat.test7 %>% add_xy_position(x = "Sample.Location")
+
+#plot + stats + save
+Kplot + stat_pvalue_manual(stat.test7, label = "p.adj.signif", tip.length = 0.01, y.position = c(155, 165, 155))
+ ggsave(
+         "PHC_Soil_Potassium.png",
+          plot = last_plot(),
+         device = NULL,
+         path = NULL,
+          scale = 1,
+          width = 2.5,
+         height = 4,
+          units = c("in"),
+          dpi = 300)
+
+ #correlations between observed bacterial richness and soil chem. factors
+alphaDIV <- read.csv("alphaDIV_Bacteria.csv")
+Richness_Soil <- read.csv("Richness_SoilData.csv")
+joint <- merge(Richness_Soil, SoilData, by = "Sample.Description", all.x = TRUE)
+
+#pH + richness
+ggplot(joint, aes(y = log(Observed), x = pH)) + geom_point(size = 5, alpha = 0.4) + theme_minimal() + geom_smooth(method = "lm", col = "#C42126", se = TRUE, size = 2) + theme(axis.text.x = element_text(size = 12, face = "bold")) + theme(axis.text.y = element_text(size = 12, face = "bold")) + theme(axis.title.x = element_text(size = 16, face = "bold")) + theme(axis.title.y = element_text(size = 16, face = "bold")) + stat_cor(label.x = 3.9, label.y = 6.5, size = 7) + ylab("Log[Observed Richness]")
+
+ggsave(
+     "PHC_Soil_pH_Observed-Richness.png",
+     plot = last_plot(),
+     device = NULL,
+     path = NULL,
+     scale = 1,
+     width = 3.5,
+     height = 4,
+     units = c("in"),
+     dpi = 300)
+
+#P + richness
+ggplot(joint, aes(x = log(P), y = log(Observed))) + geom_point(size = 5, alpha = 0.4) + theme_minimal() + geom_smooth(method = "lm", col = "#C42126", se = TRUE, size = 2) + theme(axis.text.x = element_text(size = 12, face = "bold")) + theme(axis.text.y = element_text(size = 12, face = "bold")) + theme(axis.title.x = element_text(size = 16, face = "bold")) + theme(axis.title.y = element_text(size = 16, face = "bold")) + stat_cor(label.x = 1, label.y = 6.5, size = 7) + ylab("Log[Observed Richness]") + xlab("Log[Phosphorus (mg/kg)]")
+
+ggsave(
+    "PHC_Soil_P_Observed-Richness.png",
+    plot = last_plot(),
+    device = NULL,
+    path = NULL,
+    scale = 1,
+    width = 3.5,
+    height = 4,
+    units = c("in"),
+    dpi = 300)
+
+#Ca + richness
+ggplot(joint, aes(x = log(Ca), y = log(Observed))) + geom_point(size = 5, alpha = 0.4) + theme_minimal() + geom_smooth(method = "lm", col = "#C42126", se = TRUE, size = 2) + theme(axis.text.x = element_text(size = 12, face = "bold")) + theme(axis.text.y = element_text(size = 12, face = "bold")) + theme(axis.title.x = element_text(size = 16, face = "bold")) + theme(axis.title.y = element_text(size = 16, face = "bold")) + stat_cor(label.x = 5.3, label.y = 6.5, size = 7) + ylab("Log[Observed Richness]") + xlab("Log[Calcium (mg/kg)]")
+
+ggsave(
+    "PHC_Soil_Calcium_Observed-Richness.png",
+    plot = last_plot(),
+    device = NULL,
+    path = NULL,
+    scale = 1,
+    width = 3.5,
+    height = 4,
+    units = c("in"),
+    dpi = 300)
+
+#K + richness
+ggplot(joint, aes(x = log(K), y = log(Observed))) + geom_point(size = 5, alpha = 0.4) + theme_minimal() + geom_smooth(method = "lm", col = "#C42126", se = TRUE, size = 2) + theme(axis.text.x = element_text(size = 12, face = "bold")) + theme(axis.text.y = element_text(size = 12, face = "bold")) + theme(axis.title.x = element_text(size = 16, face = "bold")) + theme(axis.title.y = element_text(size = 16, face = "bold")) + stat_cor(label.x = 3, label.y = 6.5, size = 7) + ylab("Log[Observed Richness]") + xlab("Log[Potassium mg/kg)]")
+
+ggsave(
+     "PHC_Soil_K_Observed-Richness.png",
+     plot = last_plot(),
+     device = NULL,
+     path = NULL,
+     scale = 1,
+     width = 3.5,
+     height = 4,
+     units = c("in"),
+     dpi = 300)
+
+#Total exchange capacity + richness
+ggplot(joint, aes(x = Total.Exchange.Capacity, y = Observed)) + geom_point(size = 5, alpha = 0.4) + theme_minimal() + geom_smooth(method = "lm", col = "#C42126", se = TRUE, size = 2) + theme(axis.text.x = element_text(size = 12, face = "bold")) + theme(axis.text.y = element_text(size = 12, face = "bold")) + theme(axis.title.x = element_text(size = 16, face = "bold")) + theme(axis.title.y = element_text(size = 16, face = "bold")) + stat_cor(label.x = 4, label.y = 490, size = 7) + ylab("Observed Richness") + xlab("Total Exchange Capacity (meg/100 g)")
+
+ggsave(
+     "PHC_Soil_TEC_Observed-Richness.png",
+     plot = last_plot(),
+     device = NULL,
+     path = NULL,
+     scale = 1,
+     width = 3.5,
+     height = 4,
+     units = c("in"),
+     dpi = 300)
+
+#organic matter + richness
+ggplot(joint, aes(x = log(Organic.Matter), y = log(Observed))) + geom_point(size = 5, alpha = 0.4) + theme_minimal() + geom_smooth(method = "lm", col = "#C42126", se = TRUE, size = 2) + theme(axis.text.x = element_text(size = 12, face = "bold")) + theme(axis.text.y = element_text(size = 12, face = "bold")) + theme(axis.title.x = element_text(size = 16, face = "bold")) + theme(axis.title.y = element_text(size = 16, face = "bold")) + stat_cor(label.x = 1, label.y = 6.5, size = 7) + ylab("Log[Observed Richness]") + xlab("Log[Organic Matter (%)]")
+
+ggsave(
+     "PHC_Soil_OM_Observed-Richness.png",
+     plot = last_plot(),
+     device = NULL,
+     path = NULL,
+     scale = 1,
+     width = 3.5,
+     height = 4,
+     units = c("in"),
+     dpi = 300)
+
+#mg + richness
+ggplot(joint, aes(x = log(Mg), y = log(Observed))) + geom_point(size = 5, alpha = 0.4) + theme_minimal() + geom_smooth(method = "lm", col = "#C42126", se = TRUE, size = 2) + theme(axis.text.x = element_text(size = 12, face = "bold")) + theme(axis.text.y = element_text(size = 12, face = "bold")) + theme(axis.title.x = element_text(size = 16, face = "bold")) + theme(axis.title.y = element_text(size = 16, face = "bold")) + stat_cor(label.x = 4, label.y = 6.5, size = 7) + ylab("Log[Observed Richness]") + xlab("Log[Magnesium (mg/kg)]")
+
+ggsave(
+     "PHC_Soil_Mg_Observed-Richness.png",
+     plot = last_plot(),
+     device = NULL,
+     path = NULL,
+     scale = 1,
+     width = 3.5,
+     height = 4,
+     units = c("in"),
+     dpi = 300)
+
+
+ 
+```
+
+```{Species Correlations}
+
+#subset selected genera + aggregate into dataframe
+BAC_DF <- read.csv("BAS.DF.2.csv")
+BURKHOLDERIA <- subset(BAC_DF, Genus == "Burkholderia-Caballeronia-Paraburkholderia")
+ACIDOTHERMUS <- subset(BAC_DF, Genus == "Acidothermus")
+Streptomyces <- subset(BAC_DF, Genus == "Streptomyces")
+write.csv(BURKHOLDERIA, "Burkholderia.ASVs.csv")
+write.csv(ACIDOTHERMUS, "Acidothermus.ASVs.csv")
+write.csv(Streptomyces, "Streptomyces.ASVs.csv")
+Burkie <- ddply(BURKHOLDERIA, "Sample", numcolwise(sum))
+Acido <- ddply(ACIDOTHERMUS, "Sample", numcolwise(sum))
+Strep <- ddply(Streptomyces, "Sample", numcolwise(sum))
+write.csv(Burkie, "Burkholderia.ASVs.AGG.csv")
+write.csv(Acido, "Acidothermus.ASVs.AGG.csv")
+write.csv(Strep, "Streptomyces.ASVs.AGG.csv")
+BURK2 <- read.csv("Burkholderia.ASVs.AGG.csv")
+ACID2 <- read.csv("Acidothermus.ASVs.AGG.csv")
+STREP2 <- read.csv("Streptomyces.ASVs.AGG.csv")
+ECM2 <- read.csv("ECM_DF_AGG.csv")
+BA <- merge(BURK2, ACID2, by="Sample.Code")
+BAS <- merge(BA, STREP2, by = "Sample.Code")
+BASEMF <- merge(BAS, ECM2, by = "Sample.Code")
+write.csv(BASEMF, "BAS_ECM_DF.csv")
+
+#load data
+BASEMF <- read.csv("BAS_ECM_DF.csv")
+
+#Bradyrhizobium X ECM
+ Brady.MASTER <- subset(MASTER, Brady.Rel.Abundance > 0)
+ Brady.MASTER <- subset(Brady.MASTER, ECM.Rel.Abundance > 0)
+ggplot(Brady.MASTER, aes(x=Brady.Rel.Abundance, y=ECM.Rel.Abundance)) + geom_point(size = 6, alpha = 0.9, color = "black") + theme_bw() + geom_smooth(method = "glm", col = "red3", se = TRUE, size =2, linetype = "dashed") + theme(axis.text.x = element_text(size = 10, face = "bold")) + theme(axis.text.y = element_text(size = 10, face = "bold")) + theme(axis.title.x = element_text(size = 11, face = "bold")) + theme(axis.title.y = element_text(size = 11, face = "bold", vjust = 1.5)) + xlab("Bradyrhizobium Relative Abundance") + ylab("EcM Relative Abundance") + theme(strip.text.x = element_text(size = 12, face = "bold")) + scale_x_continuous(labels = scales::percent) + scale_y_continuous(labels = scales::percent) + annotate("text", x = 0.05, y = 1, size = 5, label = expression("r"^2*"= 0.45, p = 4.171x10"^-8))
+#Linear regregssion model
+Brady.lm <- lm(ECM.Rel.Abundance ~ Brady.Rel.Abundance + Region + Compartment + Total.Exchange.Capacity + pH + P + Ca + K + Mg + Organic.Matter, data = Brady.MASTER)
+#save
+ggsave(filename = "Brady-ECM-Corr_Full.Model.9-5-22.png", width = 4, height = 3.5, plot = last_plot(), scale = 1, units = "in", dpi = 300)
+
+#Burkholderia:Acidothermus X ECM
+ggplot(BASEMF, aes(y=log(Burk.Acid), x=ECM.Rel.Abundance)) + geom_point(size = 7, alpha = 0.8, color = "sienna4") + theme_bw() + geom_smooth(method = "glm", col = "skyblue4", se = TRUE, size =3, formula =  y ~ log(x)) + theme(axis.text.x = element_text(size = 10, face = "bold")) + theme(axis.text.y = element_text(size = 10, face = "bold")) + theme(axis.title.x = element_text(size = 11, face = "bold")) + theme(axis.title.y = element_text(size = 11, face = "bold", vjust = 1.5)) + stat_cor(label.x = 0, label.y = 6.5, size = 5) + ylab("Burkholderia:Acidothermus Relative Abundance") + xlab("ECM Relative Abundance") + theme(strip.text.x = element_text(size = 12, face = "bold")) + scale_x_continuous(labels = scales::percent)
+#save
+ggsave(filename = "Burk.Acid.ECM.Corr.png", plot = last_plot(), height = 4, width = 3.5, dpi = 300, units = "in", scale = 1)
+
+#Acidothermus:Streptomyces X ECM
+ggplot(BASEMF, aes(y=log(Acid.Strep), x=ECM.Rel.Abundance)) + geom_point(size = 7, alpha = 0.8, color = "goldenrod4") + theme_bw() + geom_smooth(method = "glm", col = "skyblue4", se = TRUE, size =3, formula =  y ~ log(x)) + theme(axis.text.x = element_text(size = 10, face = "bold")) + theme(axis.text.y = element_text(size = 10, face = "bold")) + theme(axis.title.x = element_text(size = 11, face = "bold")) + theme(axis.title.y = element_text(size = 11, face = "bold", vjust = 1.5)) + stat_cor(label.x = 0, label.y = 6.5, size = 5) + ylab("Acidothermus:Streptomyces Relative Abundance") + xlab("ECM Relative Abundance") + theme(strip.text.x = element_text(size = 12, face = "bold")) + scale_x_continuous(labels = scales::percent)
+#save
+ggsave(filename = "Acid.Strep.ECM.Corr.png", plot = last_plot(), height = 4, width = 3.5, dpi = 300, units = "in", scale = 1)
+
+#Burkholderia:Streptomyces X ECM
+ggplot(BASEMF, aes(y=log(Burk.Strep), x=ECM.Rel.Abundance)) + geom_point(size = 7, alpha = 0.8, color = "peachpuff3") + theme_bw() + geom_smooth(method = "gam", col = "skyblue4", se = TRUE, size =3, formula =  y ~ log(x)) + theme(axis.text.x = element_text(size = 10, face = "bold")) + theme(axis.text.y = element_text(size = 10, face = "bold")) + theme(axis.title.x = element_text(size = 11, face = "bold")) + theme(axis.title.y = element_text(size = 11, face = "bold", vjust = 1.5)) + stat_cor(label.x = 0, label.y = 6.5, size = 5) + ylab("Burkholderia:Streptomyces Relative Abundance") + xlab("ECM Relative Abundance") + theme(strip.text.x = element_text(size = 12, face = "bold")) + scale_x_continuous(labels = scales::percent)
+#save
+ggsave(filename = "Burk.Strep.ECM.Corr.png", plot = last_plot(), height = 4, width = 3.5, dpi = 300, units = "in", scale = 1)
+
+#Burkholderia X ECM
+BURK_ADJ <- subset(BASEMF, Burk.Rel.Abundance < 0.3)
+ggplot(BURK_ADJ, aes(y=Burk.Rel.Abundance, x=ECM.Rel.Abundance)) + geom_point(size = 6, alpha = 0.5, color = "darkolivegreen") + theme_bw() + geom_smooth(method = "loess", col = "skyblue4", se = TRUE, size =2) + theme(axis.text.x = element_text(size = 8, face = "bold")) + theme(axis.text.y = element_text(size = 10, face = "bold")) + theme(axis.title.x = element_text(size = 11, face = "bold")) + theme(axis.title.y = element_text(size = 11, face = "bold", vjust = 1.5)) + stat_cor(label.x = 0, label.y = 0.35, size = 3) + ylab("Burkholderia Relative Abundance") + xlab("ECM Relative Abundance") + theme(strip.text.x = element_text(size = 12, face = "bold")) + facet_grid(~Compartment) + scale_x_continuous(labels = scales::percent) + scale_y_continuous(labels = scales::percent)
+#save
+ggsave(filename = "Burk-ECM-Corr_Facet-Comp.png", width = 4, height = 3.5, plot = last_plot(), scale = 1, units = "in", dpi =300)
+
+#Acidothermurs X ECM
+ACID_ADJ <- subset(ACID_ADJ, Acid.Rel.Abundance < 0.15)
+ggplot(ACID_ADJ, aes(y=Acid.Rel.Abundance, x=ECM.Rel.Abundance)) + geom_point(size = 6, alpha = 0.5, color = "indianred3") + theme_bw() + geom_smooth(method = "lm", col = "skyblue4", se = TRUE, size =2) + theme(axis.text.x = element_text(size = 6.2, face = "bold")) + theme(axis.text.y = element_text(size = 10, face = "bold")) + theme(axis.title.x = element_text(size = 11, face = "bold")) + theme(axis.title.y = element_text(size = 11, face = "bold", vjust = 1.5)) + stat_cor(label.x = 0, label.y = 0.18, size = 2.5) + ylab("Acidothermus Relative Abundance") + xlab("ECM Relative Abundance") + theme(strip.text.x = element_text(size = 12, face = "bold")) + facet_grid(~Compartment) + scale_x_continuous(labels = scales::percent) + scale_y_continuous(labels = scales::percent)
+#save
+ggsave(filename = "Acido-ECM-Corr_Facet-Comp.png", width = 4, height = 3.5, plot = last_plot(), scale = 1, units = "in", dpi =300)
+
+#Streptomyces X ECM
+Strep_ADJ <- subset(BASEMF, Strep.Rel.Abundance < 0.15)
+ggplot(Strep_ADJ, aes(y=Strep.Rel.Abundance, x=ECM.Rel.Abundance)) + geom_point(size = 6, alpha = 0.5, color = "mediumpurple4") + theme_bw() + geom_smooth(method = "loess", col = "skyblue4", se = TRUE, size =2) + theme(axis.text.x = element_text(size = 8, face = "bold")) + theme(axis.text.y = element_text(size = 10, face = "bold")) + theme(axis.title.x = element_text(size = 11, face = "bold")) + theme(axis.title.y = element_text(size = 11, face = "bold", vjust = 1.5)) + stat_cor(label.x = 0, label.y = 0.18, size = 2.5) + ylab("Streptomyces Relative Abundance") + xlab("ECM Relative Abundance") + theme(strip.text.x = element_text(size = 12, face = "bold")) + facet_grid(~Compartment) + scale_x_continuous(labels = scales::percent) + scale_y_continuous(labels = scales::percent)
+#save
+ggsave(filename = "Strepto-ECM-Corr_Facet-Comp.png", width = 4, height = 3.5, plot = last_plot(), scale = 1, units = "in", dpi =300)
+
+getwd()
+
+```
+
+```{Regression Models with Proportional reduction in errors}
+
+MASTER <- read.csv("Top19_Deseq2-enrich.bacteria.csv")
+
+library(stats)
+library(ggpubr)
+library(supernova)
+
+###For each 1:1 regression, remove samples with Abundance = 0
+
+#Burkholderia.Model
+burk.master <- subset(MASTER, Burkholderia > 0)
+burk.master <- subset(burk.master, ECM > 0)
+burk.model <- lm(ECM ~ Burkholderia + Region + Compartment + Total.Exchange.Capacity + pH + Organic.Matter + P + Ca + Mg + K, data = burk.master)
+burk.null.model <- lm(ECM ~ Region + Compartment + Total.Exchange.Capacity + pH + Organic.Matter + P + Ca + Mg + K, data = burk.master)
+summary(burk.model)
+summary(burk.null.model)
+anova(burk.null.model, burk.model)
+#Proportional reduction in error calculation (subtract Model (error reduced PRE values))
+supernova(burk.model)
+supernova(burk.null.model)
+
+#Bradyrhizobium.Model
+brady.master <- subset(MASTER, Bradyrhizobium > 0)
+brady.master <- subset(brady.master, ECM > 0)
+brady.model <- lm(ECM ~ Bradyrhizobium + Region + Compartment + Total.Exchange.Capacity + pH + Organic.Matter + P + Ca + Mg + K, data = brady.master)
+brady.null.model <- lm(ECM ~ Region + Compartment + Total.Exchange.Capacity + pH + Organic.Matter + P + Ca + Mg + K, data = brady.master)
+summary(brady.model)
+summary(brady.null.model)
+anova(brady.null.model, brady.model)
+#Proportional reduction in error calculation (subtract Model (error reduced PRE values))
+supernova(brady.model)
+supernova(brady.null.model)
+
+#Mycobacterium.Model
+myco.master <- subset(MASTER, Mycobacterium > 0)
+myco.master <- subset(myco.master, ECM > 0)
+myco.model <- lm(ECM ~ Mycobacterium + Region + Compartment + Total.Exchange.Capacity + pH + Organic.Matter + P + Ca + Mg + K, data = myco.master)
+myco.null.model <- lm(ECM ~ Region + Compartment + Total.Exchange.Capacity + pH + Organic.Matter + P + Ca + Mg + K, data = myco.master)
+summary(myco.model)
+summary(myco.null.model)
+anova(myco.null.model, myco.master)
+#Proportional reduction in error calculation (subtract Model (error reduced PRE values))
+supernova(myco.model)
+supernova(myco.null.model)
+
+#Sphingomonas.Model
+sphingomonas.master <- subset(MASTER, Sphingomonas > 0)
+sphingomonas.master <- subset(sphingomonas.master, ECM > 0)
+sphingomonas.model <- lm(ECM ~ Sphingomonas + Region + Compartment + Total.Exchange.Capacity + pH + Organic.Matter + P + Ca + Mg + K, data = sphingomonas.master)
+brady.null.model <- lm(ECM ~ Region + Compartment + Total.Exchange.Capacity + pH + Organic.Matter + P + Ca + Mg + K, data = sphingomonas.master)
+summary(sphingomonas.model)
+summary(sphingomonas.null.model)
+anova(sphingomonas.null.model, sphingomonas.model)
+#Proportional reduction in error calculation (subtract Model (error reduced PRE values))
+supernova(sphingomonas.model)
+supernova(sphingmonas.null.model)
+
+#do the above for each of the 19 bacterial taxa in the 'MASTER' dataframe ("Top19_Deseq2-enrich.bacteria.csv")
+#aggregate all these data into a new dataframe --> "DeseqModelData.csv"
+
+model.data <- read.csv("DeseqModelData.csv")
+
+#plot
+ggplot(model.data, aes(x= factor(Genus, level = c("Conexibacter", "Streptomyces", "Acidothermus", "Mycobacterium", "Candidatus Udaeobacter", "Acidocella", "Aquisphaera", "Reyranella", "Sphingomonas", "Bradyrhizobium", "Roseiarcus", "Mucilaginibacter", "Puia", "Acidibacter", "Burkholderia", "Granulicella", "Occallatibacter", "Bryobacter", "Candidatus Solibacter")), y=PRE.change, shape=Model.Comp, color = Int.Type)) + geom_point(aes(size=distinct.asvs)) + theme_bw() + coord_flip() + scale_color_manual(values = c("red", "gray", "black")) + xlab("") + facet_grid(~Compartment) + theme(strip.text = element_text(color = "white", size = 12, face = "bold")) + theme(strip.background = element_rect(fill = "black")) + labs(colour = "Interaction Type", size = "No. of ASVs", shape = "Significance") + scale_y_continuous(labels = scales::percent) + theme(axis.text = element_text(face = "bold")) + ylab("Change in Model Prediction") + theme(axis.title = element_text(face = "bold")) + theme(legend.title = element_text(face = "bold")) + scale_size_continuous(breaks = c(1,5,13)) + theme(axis.text.y = element_text(size = 12, face = "bold.italic"))
+
+#save
+ggsave(filename = "DeseqModelData_11-15-22.png", scale = 1, height = 7.5, width = 8, units = "in", dpi = 300, plot = last_plot())
+#modify colors in BioRender
+
+
+```
+
+```{kallisto}
+
+library("tximport")
+library('cowplot')
+library('sleuth')
+library('vegan')
+library('rtracklayer')
+library('jsonlite')
+library("devtools")
+library('gridExtra')
+library("tidyverse")
+
+#load data and link to kallisto paths
+##note that the 'results' folder needs to be specified for the genus of interest
+metadata<-read.csv('suipun.metadata.csv')
+metadata<-dplyr::mutate(metadata, path = file.path('E','CONDA','results','kallisto',Library,'abundance.h5'))
+metadata<-dplyr::mutate(metadata, log.path = file.path('E', 'CONDA', 'results','kallisto',Library,'run_info.json'))
+metadata<-dplyr::rename(metadata,sample=Library)
+
+mytags<-c("ID","Parent","Name","protein_id","locus_tag","product")
+myfilter<-list(type=c("CDS"))
+gff.path <- "E:/CONDA/burkholderia.gff3"
+burk.gff<-readGFF(gff.path,tags=mytags,filter=myfilter)
+head(burk.gff)
+
+files<-metadata$path
+txi<-tximport(files,type="kallisto",txOut=TRUE,varReduce=TRUE)
+names(txi)
+
+txi[[2]]
+
+head(txi$counts) #this is the estimated number of transcripts
+head(txi$abundance) #this is the estimated transcripts per million
+
+txc.matrix<-data.frame(txi$counts); names(txc.matrix)<-metadata$Sample.Code
+tpm.matrix<-data.frame(txi$abundance); names(tpm.matrix)<-metadata$Sample.Code
+head(tpm.matrix)
+
+metadata$n_reads<-NA
+metadata$n_pseudoaligned<-NA
+metadata$p_pseudoaligned<-NA
+
+for (i in 1:length(rownames(metadata))){
+  
+  log.file<-read_json(metadata$log.path[i])
+  metadata$n_reads[i]<-log.file$n_processed
+  metadata$n_pseudoaligned[i]<-log.file$n_pseudoaligned
+  metadata$p_pseudoaligned[i]<-log.file$p_pseudoaligned
+  
+}
+
+#inspect the results
+metadata[,c(1,4,8:10)]
+
+#match to tx2gene for each transcriptome reads TPM
+geneId<-burk.gff$ID[match(tpm.matrix$Sample.Name,burk.gff$ID)]
+proteinId<-burk.gff$protein_id[match(tpm.matrix$Sample.Name,burk.gff$ID)]
+product_name<-burk.gff$product[match(tpm.matrix$Sample.Name,burk.gff$ID)]
+
+tx2gene<-data.frame(tpm.matrix$Sample.Name,geneId,product_name); head(tx2gene)
+
+#need to link the kallisto output totals to a single file
+#aggregate by tissue type
+metadata2 <- aggregate(D01S,D03S,D05S,D07S,D08S,D11S,D12S,D14S,D15S,D16S,D17S,M02S,M03S,M05S,M06S,M07S,
+M08S,L04S,L02S,L03S,L05S,L06S,L08S,L09S,H02S,H03S,H04S,H07S,H08S~Sample.Name, data = tpm.matrix, sum)
+
+tx2gene2 <- merge(tx2gene, metadata2, all = TRUE)
+
+write.csv(tx2gene2, "burkholderia.tx2gene-Gene-Pathway.csv")
+
+#match tx2gene with expression abundance + PATRIC database pathway mapping 
+#grab PATRIC database pathway 'Names' and 'Classes' (all of these were downloaded directly from PATRIC)
+
+PATRIC_pathways <- read.csv("BVBRC_pathways_ecnumbers.csv")
+PATRIC_classes <- read.csv("not_sure")
+
+Final_Dataframe <- merge(tx2gene2, PATRIC_pathways, by = ID)
+
+#add coarse level pathway class
+Final_Dataframe2 <- merge(Final_Dataframe, )
+
+this is the final dataframe (Final_Bacteria_Transcriptome_DataFrame.csv)
+
+```
+
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.

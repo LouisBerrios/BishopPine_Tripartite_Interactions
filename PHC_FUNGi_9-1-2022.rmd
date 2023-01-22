@@ -1,0 +1,1094 @@
+---
+title: "P. muricata + Bacteria + EcM fungi"
+author: "LB"
+date: "9/1/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+root.dir="C:\Users\louis>"
+
+library(dada2)
+library(ShortRead)
+library(Biostrings)
+library(microbiome)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(gridExtra)
+library(metacoder)
+library(phyloseq)
+
+```
+
+
+```{r run DADA2 pipeline, include=FALSE, echo=FALSE}
+
+# DADA2 workflow for processing NEON ITS raw sequences
+# Follows https://benjjneb.github.io/dada2/ITS_workflow.html
+
+#-#-#-#-#-#-#-
+
+path <- "PR+Hum+CI/ITS"
+list.files(path)
+
+# Forward and reverse fastq filenames have format: SAMPLENAME_R1_001.fastq.gz and SAMPLENAME_R2_001.fastq.gz
+fnFs <- sort(list.files(path, pattern="_L001_R1_001.fastq.gz", full.names = TRUE)) # If set to be FALSE, then working directory must contain the files
+fnRs <- sort(list.files(path, pattern="_L001_R2_001.fastq.gz", full.names = TRUE))
+
+# Remove any forward files that don't have reverse counterparts, and vise versa
+# (filterAndTrim will throw an error if fnFs and fnRs have any mismatches)
+basefilenames_Fs <- sub("_L001_R1_001.fastq.gz","",basename(fnFs))
+basefilenames_Rs <- sub("_L001_R2_001.fastq.gz","",basename(fnRs))
+rm_from_fnFs <- basefilenames_Fs[which(!(basefilenames_Fs %in% basefilenames_Rs))]
+rm_from_fnRs <- basefilenames_Rs[which(!(basefilenames_Rs %in% basefilenames_Fs))]
+
+for(name in rm_from_fnFs) {
+  print(paste(name, "does not have a reverse-reads counterpart. Omitting from this analysis."))
+  fnFs <- fnFs[-which(fnFs == paste0(path, "/", name, "_L001_R1_001.fastq.gz"))]
+}
+for(name in rm_from_fnRs) {
+  print(paste(name, "does not have a forward-reads counterpart. Omitting from this analysis."))
+  fnRs <- fnRs[-which(fnRs == paste0(path, "/", name, "_L001_R2_001.fastq.gz"))]
+}
+
+# Identify primers - used Hiro's PCR primers
+FWD <- "THGGTCATTTAGAGGAASTAA"  ## CHANGE ME to your forward primer seq
+REV <- "TTYRCTRCGTTCTTCATC"  ## CHANGE ME...
+
+
+# Get all orientations of primers, just to be safe
+# Note - changed this for the dimensions project due to different sequencing primers
+# Used
+
+allOrients <- function(primer) {
+  # Create all orientations of the input sequence
+  require(Biostrings)
+  dna <- DNAString(primer)  # The Biostrings works w/ DNAString objects rather than character vectors
+  orients <- c(Forward = dna, Complement = complement(dna), Reverse = reverse(dna), 
+               RevComp = reverseComplement(dna))
+  return(sapply(orients, toString))  # Convert back to character vector
+}
+FWD.orients <- allOrients(FWD)
+REV.orients <- allOrients(REV)
+FWD.orients
+
+# “pre-filter” the sequences just to remove those with Ns, but perform no other filtering
+fnFs.filtN <- file.path(path, "filtN", basename(fnFs)) # Put N-filterd files in filtN/ subdirectory
+fnRs.filtN <- file.path(path, "filtN", basename(fnRs))
+filterAndTrim(fnFs, fnFs.filtN, fnRs, fnRs.filtN, maxN = 1, multithread = TRUE)
+
+# (From tutorial) We are now ready to count the number of times the primers appear in the 
+# forward and reverse read, while considering all possible primer orientations. 
+# Identifying and counting the primers on one set of paired end FASTQ files is
+# sufficient, assuming all the files were created using the same library preparation,
+# so we’ll just process the first sample.
+
+primerHits <- function(primer, fn) {
+  # Counts number of reads in which the primer is found
+  nhits <- vcountPattern(primer, sread(readFastq(fn)), fixed = FALSE)
+  return(sum(nhits > 0))
+}
+
+rbind(FWD.ForwardReads = sapply(FWD.orients, primerHits, fn = fnFs.filtN[[1]]), 
+      FWD.ReverseReads = sapply(FWD.orients, primerHits, fn = fnRs.filtN[[1]]), 
+      REV.ForwardReads = sapply(REV.orients, primerHits, fn = fnFs.filtN[[1]]), 
+      REV.ReverseReads = sapply(REV.orients, primerHits, fn = fnRs.filtN[[1]]))
+
+# If you see the reverse-complement of the forward primer in the reverse reads (cells [2,4] and [3,4]),
+# it's because the ITS region is short and it is reading part of the forward primer.
+
+# Remove primers using cutadapt
+
+cutadapt <- "miniconda3/bin/cutadapt.exe" # CHANGE ME to the cutadapt path on your machine
+system2(cutadapt, args = "--version") # Run shell commands from R
+
+path.cut <- file.path(path, "cutadapt")
+if(!dir.exists(path.cut)) dir.create(path.cut)
+fnFs.cut <- file.path(path.cut, basename(fnFs.filtN))
+fnRs.cut <- file.path(path.cut, basename(fnRs.filtN))
+
+FWD.RC <- dada2:::rc(FWD)
+REV.RC <- dada2:::rc(REV)
+# Trim FWD and the reverse-complement of REV off of R1 (forward reads)
+R1.flags <- paste("-g", FWD, "-a", REV.RC) 
+# Trim REV and the reverse-complement of FWD off of R2 (reverse reads)
+R2.flags <- paste("-G", REV, "-A", FWD.RC) 
+# Run Cutadapt
+for(i in seq_along(fnFs.filtN)) {
+# for(i in 1:10) {
+  system2(cutadapt, args = c(R1.flags, R2.flags, "-n", 2, # -n 2 required to remove FWD and REV from reads
+                             "-o", fnFs.cut[i], "-p", fnRs.cut[i], # output files
+                             fnFs.filtN[i], fnRs.filtN[i], # input files; fnFs.filtN replaced by fnFs.filtN, etc.
+                             "--minimum-length", "1")) # min length of cutadapted reads: >0 
+}
+
+# Count primers in first post-cutadapt sample (should all be 0):
+rbind(FWD.ForwardReads = sapply(FWD.orients, primerHits, fn = fnFs.cut[[50]]), 
+      FWD.ReverseReads = sapply(FWD.orients, primerHits, fn = fnRs.cut[[50]]), 
+      REV.ForwardReads = sapply(REV.orients, primerHits, fn = fnFs.cut[[50]]), 
+      REV.ReverseReads = sapply(REV.orients, primerHits, fn = fnRs.cut[[50]]))
+
+# Since they are zero, skip step to remove other orientations of primers
+
+# Forward and reverse fastq filenames have the format:
+cutFs <- sort(list.files(path.cut, pattern = "_L001_R1_001.fastq.gz", full.names = TRUE))
+cutRs <- sort(list.files(path.cut, pattern = "_L001_R2_001.fastq.gz", full.names = TRUE))
+
+# Extract sample names, assuming filenames have format:
+get.sample.name <- function(fname) {
+  paste(strsplit(basename(fname), split="_")[[1]][1:3], collapse="_")
+}
+sample.names <- unname(sapply(cutFs, get.sample.name))
+head(sample.names)
+
+# Inspect read quality profiles of forward reads #1-2
+plotQualityProfile(cutFs[1:12])
+
+# Inspect read quality profiles of reverse reads #1-2
+plotQualityProfile(cutRs[1:12])
+
+# Filter and trim
+
+# Assigning the filenames for the output of the filtered reads 
+# to be stored as fastq.gz files.
+filtFs <- file.path(path, "filtered", basename(fnFs.filtN))
+filtRs <- file.path(path, "filtered", basename(fnRs.filtN))
+
+out <- filterAndTrim(cutFs, filtFs, cutRs, filtRs, maxN = 0, maxEE = c(2, 2), truncQ = 8, minLen = 100, rm.phix = TRUE, compress = TRUE, multithread = FALSE)  # on Mac, set multithread = TRUE
+head(out)
+
+filtFs.out <- list.files(paste(path, "filtered", sep="/"), pattern="_L001_R1_001.fastq.gz", full.names=TRUE)
+filtRs.out <- list.files(paste(path, "filtered", sep="/"), pattern="_L001_R2_001.fastq.gz", full.names=TRUE)
+
+# Learn the error rates
+errF <- learnErrors(filtFs.out, multithread = TRUE)
+errR <- learnErrors(filtRs.out, multithread = TRUE)
+
+# Visualize estimated error rates
+plotErrors(errF, nominalQ = TRUE)
+
+# Dereplicate identical reads
+derepFs <- derepFastq(filtFs.out, verbose = TRUE)
+derepRs <- derepFastq(filtRs.out, verbose = TRUE)
+# Name the derep-class objects by the sample names
+get.sample.name <- function(fname) {
+  paste(strsplit(basename(fname), "_")[[1]][1:3], collapse="_")
+}
+sample.names <- unname(sapply(filtFs.out, get.sample.name))
+
+# DADA2's core sample inference algorithm
+dadaFs <- dada(derepFs, err = errF, multithread = TRUE)
+dadaRs <- dada(derepRs, err = errR, multithread = TRUE)
+
+          
+# Merge pairs
+mergers <- mergePairs(dadaFs, derepFs, dadaRs, derepRs, verbose=TRUE,trimOverhang = TRUE)
+
+# Construct sequence table
+seqtab <- makeSequenceTable(mergers)
+dim(seqtab)
+
+# Remove chimeras
+seqtab.nochim <- removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, verbose=TRUE)
+
+saveRDS(seqtab,"PHC-ITS1.seqtab.R1.RDS")
+saveRDS(seqtab.nochim,"PHC-ITS1.seqtab.nochim.R1.RDS")
+
+# Inspect distribution of sequence lengths
+hist(nchar(getSequences(seqtab.nochim)))
+
+# Track reads through pipeline
+getN <- function(x) sum(getUniques(x))
+
+#format out to accommodate dropped samples
+raw.sample.names <- unname(sapply(row.names(out), get.sample.name))
+
+track <- cbind(sapply(dadaFs, getN), sapply(dadaRs, getN), 
+               sapply(mergers, getN), rowSums(seqtab.nochim))
+
+track2<-cbind(out,track[match(row.names(out),row.names(track)),])
+
+# If processing a single sample, remove the sapply calls: e.g. replace
+# sapply(dadaFs, getN) with getN(dadaFs)
+colnames(track2) <- c("input", "filtered", "denoisedF", "denoisedR", "merged", 
+                     "nonchim")
+write.csv(track2,"PHC-ITS1_fungi_summary.csv")
+
+rownames(track) <- sample.names
+head(track2)
+
+```
+
+```{r assign taxonomy, echo=FALSE}
+
+
+seqtab.nochim<-readRDS("PHC-ITS1.seqtab.nochim.R1.RDS")
+
+# Assign taxonomy using the UNITE database
+unite.ref <- "./sh_general_release_dynamic_10.05.2021"
+taxa <- assignTaxonomy(seqtab.nochim, unite.ref, multithread = TRUE, tryRC = TRUE)
+
+taxa.print <- taxa  # Removing sequence rownames for display only
+rownames(taxa.print) <- NULL
+head(taxa.print)
+
+# Save OTU table and taxonomic table as RDS files
+# to hand off to dada2_to_phyloseq.R
+saveRDS(seqtab.nochim, "PHC-ITS1-FUNGI_seqtab_nochim_taxa.rds")
+saveRDS(taxa, "PHC-ITS1-FUNGI-TAXA.rds")
+
+```
+
+```{r create the phyloseq object}
+
+#read in the taxonomy & OTU table files that were created from DADA2
+
+seqtab.nochim<-readRDS('PHC-ITS1-FUNGI_seqtab_nochim_taxa.rds')
+taxa<-readRDS('PHC-ITS1-FUNGI-TAXA.rds')
+
+# import sample_data table
+sample <- read.csv("PHC-ITS1-FUNGI.SAMPLE_DATA_TABLE.csv")
+SAM <- sample_data(sample, errorIfNULL = T)
+
+#add functional guild data
+fungal.traits.database<-read.csv('FungalTraits 1.2_ver_16Dec_2020.csv')
+tax.table<-data.frame(taxa)
+Genus<-gsub("g__","",tax.table$Genus)
+traits_table<-fungal.traits.database[match(Genus,fungal.traits.database$GENUS),]
+tax.trait.table<-cbind(tax.table,traits_table)
+
+#create a phyloseq object
+fun.ps <- phyloseq(otu_table(seqtab.nochim, taxa_are_rows=FALSE), sample_data(SAM), tax_table(as.matrix(tax.trait.table)))
+
+#save phyloseq object
+saveRDS(fun.ps,"PHC-ITS-FUN-PS_3-22.rds")
+
+```
+
+Start from here if you are not reprocessing the sequencing data
+
+```{r create a subset phyloseq object for analysis}
+
+#read in phyloseq object
+fungi.ps<-readRDS('PHC-ITS-FUN-PS_3-22.rds')
+
+```
+
+```{r making taxonomy plot with metacoder + relative abundance plots}
+
+#prune taxa + samples 
+ps1 = prune_taxa(taxa_sums(fungi.ps) > 100, fungi.ps) 
+ps1 = prune_samples(sample_sums(ps1)>5000, ps1)
+
+#rarefy the dataset
+ps.fun.rare <- rarefy_even_depth(ps1, sample.size = min(sample_sums(ps1)),
+  rngseed = FALSE, replace = TRUE, trimOTUs = TRUE, verbose = TRUE)
+
+#save rarefied dataset
+saveRDS(ps.fun.rare, "PHC-Fungi-PS-Rarefied.rds")
+
+#create ASV-TAX table
+
+taxa_names(ps.fun.rare) <- paste0("Seq", seq(ntaxa(ps.fun.rare)))
+ASV_FUN <- data.frame(otu_table(ps.fun.rare))
+TAX_FUN <- data.frame(tax_table(ps.fun.rare))
+t_ASV_FUN <- t(ASV_FUN)
+FUN_ASV_TAX <- merge(t_ASV_FUN, TAX_FUN, by = "row.names")
+
+#create the combined OTU table plus taxonomy string metacoder needs
+
+#read it in using phyloseq object
+tax_table(ps.fun.rare)<-tax_table(ps.fun.rare)[,1:32]
+x1<-parse_phyloseq(ps.fun.rare)
+
+#calculate relative abundance
+x1$data$abund_data <- calc_obs_props(x1, "otu_table")
+
+#calculate total abundance by compartment (Bulk Soil, Rhizosphere, Endosphere)
+x1$data$Comparment_abund<-calc_taxon_abund(x1, "abund_data",groups=x1$data$sample_data$Compartment)
+
+### make taxonomy plots
+# Make sure we use functions from correct package
+transform <- microbiome::transform
+
+# Merge rare taxa to speed up examples
+pseq <- microbiome::transform(ps.fun.rare, "compositional")
+
+#save rarefied + transformed rds
+saveRDS(pseq, "PHC-Fungi-Rarefied-Transf.rds")
+
+pseq <- aggregate_rare(pseq, level = "Order", detection = 1/100, prevalence = 2/100)
+
+#create dataframe from phyloseq 
+FUNdf <- psmelt(pseq)
+
+###construct a stacked barplot showing relative abundance at 'Order' level
+#expand color palettes to fit data
+library(RColorBrewer)
+colourCount <- length(unique(FUNdf$Order))
+getPalette <- colorRampPalette(brewer.pal(9, "Paired"))
+
+#filter taxa by Abundance + merge "Unknown and Other" groups
+FUNdf$Order[FUNdf$Abundance < 0.1] <- "Taxa < 10% Abundant"
+FUNdf$Order[FUNdf$Order == "Unknown" | FUNdf$Order == "Other" | FUNdf$Order == "Taxa < 10% Abundant"] <- "Taxa < 10% Abundant"
+
+#plot the relative abundance by Order
+gg <- ggplot(FUNdf, aes(fill=Order, y=Abundance, x=Compartment)) + geom_bar(position="fill", stat="identity") + theme_minimal() + facet_grid(~SWS) + scale_fill_manual(values = getPalette(colourCount)) + ylab("Relative Abundance") + theme(axis.text.x = element_text(angle=45))
+
+#remove precursors from 'Order' designations in the plot legend
+gg1 <- ggplot(FUNdf, aes(fill=Order, y=Abundance, x=Compartment)) + geom_bar(position="fill", stat="identity") + theme_minimal() + facet_grid(~SWS) + scale_fill_manual(values = getPalette(colourCount), labels = c("Agaricales", "Archaeorhizomycetales", "Atheliales", "Boletales", "Cantharellales", "Capnodiales", "Chaetothyriales", "Eurotiales", "Geminibasidiales", "GS11", "Helotiales", "Hypocreales", "Mortierellales", "Mytilinidales", "Ostropales", "Pezizales", "Russulales", "Saccharomycetales", "Sebacinales", "Sordariales", "Thelebolales", "Thelephorales", "Trechisporales", "Tremellales", "Trichosporonales", "Taxa < 10% Abundant")) + ylab("Relative Abundance") + theme(axis.text.x = element_text(angle=45))
+
+#Phylum-level compositional plot
+colourCount <- length(unique(FUNdf$Phylum))
+getPalette <- colorRampPalette(brewer.pal(9, "Set1"))
+
+ggplot(FUNdf, aes(fill=Phylum, y=Abundance, x=Compartment)) + geom_bar(position="fill", stat="identity") + theme_minimal() + facet_grid(~SWS) + scale_fill_manual(values = getPalette(colourCount), labels = c("Ascomycota", "Basidiobolomycota", "Basidiomycota", "Calcarisporiellomycota", "Chytridiomycota", "Entorrhizomycota", "Glomeromycota", "GS01", "Kickxellomycota", "Mortierellomycota", "Mucoromycota", "Olpidiomycota", "Rozellomycota", "Zoopagomycota", "Unidentified Phyla")) + ylab("Relative Abundance") + theme(axis.text.x = element_text(angle=45)) + scale_y_continuous(labels = scales::percent)
+
+#change the y-axis to percent
+gg1 + scale_y_continuous(labels = scales::percent)
+
+# construct a composition stacked bar plot based on guild assignment
+pseq2 <- microbiome::transform(ps.fun.rare, "compositional")
+FUNdf2 <- psmelt(pseq2)
+getPalette <- colorRampPalette(brewer.pal(9, "Set1"))
+colourCount <- length(unique(FUNdf2$primary_lifestyle))
+gg2 <- ggplot(FUNdf2, aes(fill=primary_lifestyle, y=Abundance, x=Compartment)) + 
+geom_bar(position="fill", stat="identity") + theme_minimal() + scale_fill_manual(values = getPalette(colourCount)) + facet_grid(~SWS) + theme(axis.text.x = element_text(angle=45)) + scale_y_continuous(labels = scales::percent)
+
+#merge low abundant guilds
+FUNdf2$primary_lifestyle[FUNdf2$primary_lifestyle == "algal_parasite" | FUNdf2$primary_lifestyle == "animal_endosymbiont" | FUNdf2$primary_lifestyle == "animal_parasite" | FUNdf2$primary_lifestyle == "dung_saprotroph" | FUNdf2$primary_lifestyle == "nectar/tap_saprotroph" | FUNdf2$primary_lifestyle == "lichen_parasite" | FUNdf2$primary_lifestyle == "lichenized" | Fundf2$primary_lifestyle == "sooty_mold" | FUNdf2$primary_lifestyle == "unspecified_pathotroph" | FUNdf2$primary_lifestyle == "pollen_saprotroph" | FUNdf2$primary_lifestyle == "arbuscular_mycorrhizal"] <- "Other guilds"
+
+#remove "_" from legend and guilds
+ggplot(FUNdf2, aes(fill=primary_lifestyle, y=Abundance, x=Compartment)) + geom_bar(position="fill", stat="identity") + theme_minimal() + scale_fill_manual(values = getPalette(colourCount), labels = c("Blank", "Ectomycorrhizal", "Epiphyte", "Foliar endophyte", "Litter saprotroph", "Mycoparasite", "Other guilds", "Plant pathogen", "Root endophyte", "Soil saprotroph", "Unspecified saprotroph", "Wood saprotroph", "Unclassified")) + facet_grid(~SWS) + ylab("Relative Abundance") + theme(axis.text.x = element_text(angle = 45)) + scale_y_continuous(labels = scales::percent) + labs(fill = "Guild")
+
+#alternative plot
+ggplot(FUNDF3, aes(fill=primary_lifestyle, y=Abundance, x=Compartment)) + geom_bar(position="fill", stat="identity") + theme_bw() + scale_fill_manual(values = c("cadetblue", "snow4", "burlywood", "brown", "dodgerblue4", "khaki4", "lightpink4", "orange3", "springgreen4"), labels = c("Ectomycorrhizal", "Mycoparasite", "Other guilds", "Plant pathogen", "Root endophyte", "Soil saprotroph", "Unspecified saprotroph", "Wood saprotroph", "Unclassified")) + facet_grid(~SWS) + ylab("Relative Abundance") + theme(axis.text.x = element_text(angle = 45, size = 10, face = "bold", hjust = 1)) + scale_y_continuous(labels = scales::percent) + labs(fill = "Guild") + xlab("") + theme(axis.text.y = element_text(size = 14, face = "bold")) + theme(legend.title = element_text(size = 14, face = "bold")) + theme(strip.text = element_text(size = 12, face = "bold")) + theme(axis.title.y = element_text(size = 16, face = "bold"))+ theme(axis.text.x = element_text(size = 12, face = "bold")) + theme(legend.text = element_text(face = "bold"))
+#save
+ggsave(
+    filename = "PHC_FUN_GUILD.BAR.png",
+    plot = last_plot(),
+    device = NULL,
+    path = NULL,
+    scale = 1,
+    width = 5,
+    height = 4,
+    units = c("in"),
+    dpi = 300)
+
+
+```
+
+```{sequence abundance bar plots}
+
+library(tidyverse)
+getPalette <- colorRampPalette(brewer.pal(9, "Set1"))
+colourCount = length(unique(FUNdf2$GENUS))
+# top 90 ASVs partitioned by 'Compartment'
+FUNdf2 %>% 
+  group_by(GENUS,Compartment) %>%
+  summarise(n=sum(Abundance, na.rm=TRUE)) %>%
+  arrange(desc(n)) %>%
+  head(90) %>%
+  ggplot(aes(x=reorder(GENUS,n),y=n, fill=GENUS)) +
+  xlab("") + ylab("Rarefied No. of Sequences [Log10]") + geom_col(alpha = 0.6, color = "black") + coord_flip() +  theme_minimal() + scale_fill_manual(values = getPalette(colourCount)) + labs(fill="Genus")
+
+#Top 120 ASVs + remove 'NA'
+FUNdf4 <- subset(pseqDF, GENUS != "NA")
+
+FUNdf4 %>% 
+     group_by(GENUS,Compartment) %>%
+     summarise(n=sum(Abundance, na.rm=TRUE)) %>%
+     arrange(desc(n)) %>%
+     head(120) %>%
+     ggplot(aes(x=reorder(GENUS,n),y=n, fill=Compartment)) +  scale_fill_manual(values =wes_palette("FantasticFox1", n=3)) + xlab("") + ylab("Rarefied No. of Sequences [Log10]") + geom_col(alpha = 0.6, color = "black") + coord_flip() + theme_minimal() + labs(fill="Compartment") + theme(axis.text.y = element_text(size = 6.5, face = "bold")) + labs(title = "Top 120 Fungal ASVs", size = 12)
+#modified
+FUNdf4 %>% 
+    group_by(GENUS,Compartment) %>%
+    summarise(n=sum(Abundance, na.rm=TRUE)) %>%
+    arrange(desc(n)) %>%
+    head(120) %>%
+    ggplot(aes(x=reorder(GENUS,n),y=n, fill=Compartment)) +  scale_fill_manual(values =wes_palette("Moonrise2", n=3)) + xlab("") + ylab("Rarefied No. of Sequences [Log10]") + geom_col(alpha = 0.6, color = "black") + coord_flip() + theme_minimal() + labs(fill="Compartment") + theme(axis.text.y = element_text(size = 6.5, face = "bold.italic")) + labs(title = "Top 120 Fungal ASVs", size = 12) + theme(axis.text.x = element_text(size = 8, face = "bold"))
+
+
+#partitioned by SWS
+colourCount = length(unique(FUNdf4$GENUS))
+FUNdf4 %>% 
+     group_by(GENUS,SWS) %>%
+     summarise(n=sum(Abundance, na.rm=TRUE)) %>%
+     arrange(desc(n)) %>%
+     head(120) %>%
+     ggplot(aes(x=reorder(GENUS,n),y=n, fill=SWS)) +  scale_fill_jco() + xlab("") + ylab("Rarefied No. of Sequences [Log10]") + geom_col(alpha = 0.6, color = "black") + coord_flip() + theme_minimal() + labs(fill="Site") + theme(axis.text.y = element_text(size = 5, face = "bold")) + labs(title = "Top 120 Fungal ASVs", size = 12)
+#modified
+FUNdf4 %>% 
+    group_by(GENUS,SWS) %>%
+    summarise(n=sum(Abundance, na.rm=TRUE)) %>%
+    arrange(desc(n)) %>%
+    head(120) %>%
+    ggplot(aes(x=reorder(GENUS,n),y=n, fill=SWS)) +  scale_fill_manual(values =wes_palette("Darjeeling1", n=3)) + xlab("") + ylab("Rarefied No. of Sequences [Log10]") + geom_col(alpha = 0.6, color = "black") + coord_flip() + theme_minimal() + labs(fill="Site") + theme(axis.text.y = element_text(size = 5.5, face = "bold.italic")) + labs(title = "Top 120 Fungal ASVs", size = 12) + theme(axis.text.x = element_text(size = 8, face = "bold"))
+
+#Top 20 ECM fungi barplot aggregated by genus (relative abundance per all sequences)
+FUNGI <- readRDS("PHC-Fungi-PS-Rarefied.rds")
+FUNGI_DF <- psmelt(FUNGI)
+ECM <- subset(FUNGI_DF, primary_lifestyle == "ectomycorrhizal")
+ECM_AGG <- aggregate(Abundance ~ GENUS, data = ECM, FUN = sum)
+ECM_AGG$Rel.Prop <- ECM_AGG$Abundance/sum(ECM_AGG$Abundance)
+ECM_AGG$title <- "ECM Fungi"
+#plot
+ECM_AGG %>% 
+    group_by(GENUS, title) %>%
+    summarise(n=sum(Rel.Prop, na.rm=TRUE)) %>%
+    arrange(desc(n)) %>%
+    head(20) %>%
+    ggplot(aes(x=reorder(GENUS,n),y=n, fill=Genus)) + xlab("") + ylab("Relative No. of Sequences") + geom_col(alpha = 0.6, color = "black", fill = "darkgoldenrod4") + coord_flip() + theme_bw() + theme(axis.text.y = element_text(size = 6.5, face = "bold")) + theme(strip.text = element_text(size = 12, face = "bold")) + facet_grid(~title) + theme(axis.text.x = element_text(size = 8, face = "bold")) + theme(axis.text.y = element_text(size = 8, face = "bold.italic")) + theme(axis.title.x = element_text(size = 5, face = "bold", vjust = 0.5)) + scale_y_continuous(labels = scales::percent)
+#save plot
+ggsave(filename = "Top20_ECM-FUNGI_Genus_BAR.png", scale = 1, height = 2.5, width = 2.5, units = "in", dpi = 300, plot = last_plot())
+#save dataframe
+write.csv(ECM_AGG, "ECM_Aggregated.by.Genus.csv")
+
+#Top 20 Genera bar plots (based on relative sequences per compartment)
+#group by genus and compartment
+ECM2 <- ECM %>% 
+    group_by(GENUS, Compartment) %>% 
+    dplyr::summarise(n=sum(Abundance, na.rm =TRUE)) %>% 
+    as.data.frame()
+#subset by compartment
+ECM_Endo <- subset(EcM2, Compartment == "Endosphere")
+ECM_Rhizo <- subset(ECM2, Compartment == "Rhizosphere")
+ECM_Bulk <- subset(ECM2, Compartment == "Bulk soil")
+#add columns/data to each dataframe
+ECM_Endo$Rel.Prop <- ECM_Endo$n/sum(ECM_Endo$n)
+ECM_Endo$title <- "ECM Fungi"
+colnames(ECM_Endo)[colnames(ECM_Endo) == "n"] <- "Abundance"
+ECM_Rhizo$Rel.Prop <- ECM_Rhizo$n/sum(ECM_Rhizo$n)
+ECM_Rhizo$title <- "ECM Fungi"
+colnames(ECM_Rhizo)[colnames(ECM_Rhizo) == "n"] <- "Abundance"
+ECM_Bulk$Rel.Prop <- ECM_Bulk$n/sum(ECM_Bulk$n)
+colnames(ECM_Bulk)[colnames(ECM_Bulk) == "n"] <- "Abundance"
+ECM_Bulk$title <- "ECM Fungi"
+#merge dataframes
+ECM_ER <- rbind(ECM_Endo, ECM_Rhizo)
+ECM_ERB <- rbind(ECM_ER, ECM_Bulk)
+#subset by top 20 genera
+ECM_ERB_SUB <- subset(ECM_ERB, GENUS == "Inocybe" | GENUS == "Russula" | GENUS == "Tomentella" | GENUS == "Amanita" | GENUS == "Clavulina" | GENUS == "Cenococcum" | GENUS == "Rhizopogon" | GENUS == "Amphinema" | GENUS == "Thelephora" | GENUS == "Tricholoma" | GENUS == "Sebacina" | GENUS == "Helvella" | GENUS == "Byssocorticium" | GENUS == "Geopora" | GENUS == "Pseudotomentella" | GENUS == "Cortinarius" | GENUS == "Suillus" | GENUS == "Laccaria" | GENUS == "Tylospora" | GENUS == "Lactarius")
+#plot
+ECM_ERB_SUB %>% 
+    group_by(GENUS, Compartment) %>%
+    summarise(n=sum(Rel.Prop, na.rm=TRUE)) %>%
+    arrange(desc(n)) %>%
+    ggplot(aes(x=reorder(GENUS,n),y=n, fill = Compartment)) + xlab("") + ylab("Relative No. of Sequences") + geom_col(alpha = 0.6, color = "black") + coord_flip() + theme_bw() + theme(axis.text.y = element_text(size = 6.5, face = "bold")) + theme(strip.text = element_text(size = 7, face = "bold")) + theme(axis.text.x = element_text(size = 7, face = "bold", angle = 45, vjust = 0.5)) + theme(axis.text.y = element_text(size = 8, face = "bold.italic")) + theme(axis.title.x = element_text(size = 8, face = "bold", vjust = 0.5)) + scale_fill_manual(values = wes_palette("Moonrise2", n=3)) + facet_grid(~Compartment) + theme(legend.position = "none") + scale_y_continuous(labels = scales::percent)
+#save plot
+ggsave(filename = "Top20_ECMF_Barplot_Facet.by.Compt.png", scale = 1, height = 4.5, width = 4, units = "in", dpi = 300, plot = last_plot())
+
+
+#comparison by region
+#subset and group by genus and region (i.e., SWS)
+ECM3 <- ECM %>% 
+     group_by(GENUS, SWS) %>% 
+     dplyr::summarise(n=sum(Abundance, na.rm =TRUE)) %>% 
+     as.data.frame()
+ECM_HC <- subset(ECM3, SWS == "HC")
+ECM_CINP <- subset(ECM3, SWS == "CINP")
+ECM_PRNS <- subset(ECM3, SWS == "PRNS")
+ECM_HC <- subset(ECM3, SWS == "HC")
+ECM_CINP <- subset(ECM3, SWS == "CINP")
+ECM_PRNS$Rel.Prop <- ECM_PRNS$n/sum(ECM_PRNS$n)
+ECM_PRNS$title <- "ECM Fungi"
+colnames(ECM_PRNS)[colnames(ECM_PRNS) == "n"] <- "Abundance"
+ECM_HC$Rel.Prop <- ECM_HC$n/sum(ECM_HC$n)
+ECM_HC$title <- "ECM Fungi"
+colnames(ECM_HC)[colnames(ECM_HC) == "n"] <- "Abundance"
+ECM_CINP$Rel.Prop <- ECM_CINP$n/sum(ECM_CINP$n)
+ECM_CINP$title <- "ECM Fungi"
+colnames(ECM_CINP)[colnames(ECM_CINP) == "n"] <- "Abundance"
+ECM_PH <- rbind(ECM_PRNS, ECM_HC)
+ECM_PHC <- rbind(ECM_PH, ECM_CINP)
+#the above merged dataframe will show top 20 genera (based on sequences across sites) but will ignore site-specific genera abundances 
+
+#find top 20 genera from each region and then merge the dataframes to account for regional differences
+ECM_PRNS_TOP20 <- subset(ECM_PRNS, Abundance > 200)
+ECM_HC_TOP20 <- subset(ECM_HC, Abundance > 94)
+ECM_CINP_TOP20 <- subset(ECM_CINP, Abundance > 111)
+ECM_PH_20 <- rbind(ECM_PRNS_TOP20, ECM_HC_TOP20)
+ECM_PHC_20 <- rbind(ECM_PH_20, ECM_CINP_TOP20)
+ECM_PHC_20 %>% 
+     group_by(GENUS, SWS) %>%
+     summarise(n=sum(Rel.Prop, na.rm=TRUE)) %>%
+     arrange(desc(n)) %>%
+     ggplot(aes(x=reorder(GENUS,n),y=n, fill = SWS)) + xlab("") + ylab("Relative No. of Sequences") + geom_col(alpha = 0.6, color = "black") + coord_flip() + theme_bw() + theme(axis.text.y = element_text(size = 6.5, face = "bold")) + theme(strip.text = element_text(size = 7, face = "bold")) + theme(axis.text.x = element_text(size = 7, face = "bold", angle = 45, vjust = 0.5)) + theme(axis.text.y = element_text(size = 8, face = "bold.italic")) + theme(axis.title.x = element_text(size = 8, face = "bold", vjust = 0.5)) + scale_fill_manual(values = wes_palette("Darjeeling1", n=3)) + facet_grid(~SWS) + theme(legend.position = "none") + scale_y_continuous(labels = scales::percent)
+#save plot
+ggsave(filename = "Top20_ECMF_Barplot_Facet.by.Region.png", scale = 1, height = 4.5, width = 4, units = "in", dpi = 300, plot = last_plot())
+#save dataframe
+write.csv(ECM_PHC_20, "ECM_PHC_Top20_Region.csv")
+
+```
+
+```{alpha diversity}
+
+library(phyloseq)
+library(ggsci)
+
+#read in non-rarefied + non-transformed phyloseq
+pseq.non.rare <- readRDS("PHC-ITS1-FUNGI-PS.rds")
+
+#estimate richness based on samples
+funaDIV <- estimate_richness(pseq.non.rare)
+
+#export/save alpha diversity table 
+write.csv(funaDIV, "alphaDIV_FUNGi.csv")
+
+#plot alpha diversity
+plot_richness(pseq.non.rare, x = "Compartment", measures = c("Observed", "Chao1", "Shannon", "Fisher")) + theme_minimal() + xlab("") + geom_jitter(aes(fill=SWS), size = 2.5, colour="black", pch=21, stroke = 1.5, width = 0.2, alpha = 0.9) + theme(axis.text.x = element_text(angle = 45)) + labs(title = "Fungal Community") + labs(fill = "Site")
+
+#boxplot
+F2 <- plot_richness(pseq.non.rare, x = "SWS", color = "Compartment", measures = c("Observed", "Chao1", "Shannon", "Fisher")) + theme_minimal() + xlab("") + theme(axis.text.x = element_text(angle = 45)) + labs(title = "Fungal Community") + geom_boxplot()
+
+F2 + scale_color_manual(values= wes_palette("BottleRocket2", n=3))
+
+#anova test
+test <- psmelt(pseq.non.rare)
+anova_result <- aov(Abundance ~ SWS, test)
+summary(anova_result)
+
+anova_result2 <- aov(Abundance ~ Compartment, test)
+summary(anova_result2)
+
+#tukey test
+library(agricolae)
+
+tukey_result <- HSD.test(anova_result, "SWS", group = TRUE)
+print(tukey_result)
+
+tukey_result2 <- HSD.test(anova_result2, "Compartment", group = TRUE)
+print(tukey_result2)
+
+```
+
+```{NMDS ordinations}
+
+#perform an ordination
+pseq <- microbiome::transform(ps.fun.rare, "compositional")
+ordination <- ordinate(pseq, "NMDS", "bray", k=4)
+#plot ordination
+library(ggsci) # color scheme
+library(wesanderson) # color scheme
+all <- plot_ordination(pseq, ordination, type="sample",color="Compartment",shape="SWS") + theme_minimal() + scale_color_jco() + geom_point(size = 4)
+
+all
+
+#plot solely by site (SWS) or compartment
+plot_ordination(pseq, ordination, type="sample",color="Compartment", axes = 2:3) + theme_minimal() + scale_color_manual(values = wes_palette("BottleRocket2", n =3)) + geom_point(size = 4) + stat_ellipse(type ="norm", linetype = 2) + stat_ellipse(type ="t") + labs(title = "Fungal Community")
+
+plot_ordination(pseq, ordination, type="sample",color="Compartment", axes = 1:2) + theme_minimal() + scale_color_manual(values = wes_palette("BottleRocket2", n =3)) + geom_point(size = 4) + stat_ellipse(type ="norm", linetype = 2) + stat_ellipse(type ="t") + labs(title = "Fungal Community")
+
+plot_ordination(pseq, ordination, type="sample",color="SWS", axes = 2:3) + theme_minimal() + scale_color_manual(values = wes_palette("BottleRocket2", n =3)) + geom_point(size = 4) + stat_ellipse(type ="norm", linetype = 2) + stat_ellipse(type ="t") + labs(title = "Fungal Community")
+
+plot_ordination(pseq, ordination, type="sample",color="SWS", axes = 1:2) + theme_minimal() + scale_color_manual(values = wes_palette("BottleRocket2", n =3)) + geom_point(size = 4) + stat_ellipse(type ="norm", linetype = 2) + stat_ellipse(type ="t") + labs(title = "Fungal Community")
+
+#subset phyloseq for ordinations/plots by select sample_data variables (e.g., Compartment)
+PRNS <- subset_samples(pseq, SWS=="PRNS")
+CINP <- subset_samples(pseq, SWS == "CINP")
+HC <- subset_samples(pseq, SWS =="HC")
+
+#ordinate the subset ordinations
+PRNS.ord <- ordinate(PRNS, "NMDS", "bray")
+CINP.ord <- ordinate(CINP, "NMDS", "bray")
+HC.ord <- ordinate(HC, "NMDS", "bray")
+
+#plot subset ordinations
+#PRNS
+PRNS.ord.plot <- plot_ordination(PRNS, PRNS.ord, type="sample",color="Compartment") + theme_minimal() + scale_color_brewer(palette = "Dark2") + geom_point(size = 4, alpha = 0.8)
+#CINP
+CINP.ord.plot <- plot_ordination(CINP, CINP.ord, type="sample", color="Compartment") + theme_minimal() + scale_color_brewer(palette = "Dark2") + geom_point(size = 4, alpha = 0.8)
+#HC
+HC.ord.plot <- plot_ordination(HC, HC.ord, type="sample", color="Compartment") + theme_minimal() + scale_color_brewer(palette = "Dark2") + geom_point(size = 4, alpha = 0.8)
+p1
+#add normal and Student's t distribution ellipses
+#PRNS dataset
+PRNS.ord.plot + stat_ellipse(type = "norm", linetype = 2) + stat_ellipse(type = "t")
+#CINP
+CINP.ord.plot + stat_ellipse(type = "norm", linetype = 2) + stat_ellipse(type = "t")
+#HC
+HC.ord.plot + stat_ellipse(type = "norm", linetype = 2) + stat_ellipse(type = "t")
+#all datasets (e.g., PRNS+CINP+HC)
+all + stat_ellipse(type ="norm", linetype = 2) + stat_ellipse(type ="t")
+
+#plot Figure 2
+all + stat_ellipse(type ="norm", linetype = 2) + guides(color = guide_legend(title = "Region")) + theme(axis.text.x = element_text(size = 10, face = "bold")) + theme(axis.text.y = element_text(size = 10, face = "bold")) + theme(axis.title = element_text(size = 12, face = "bold")) + labs(title = "Fungal Communities")
+
+#alternative plots
+plot_ordination(FUN.PS, ordination, type="sample", color="Compartment", axes=2:3) + theme_bw() + scale_color_manual(values = wes_palette("Moonrise2", n=3)) + geom_point(size = 4, alpha = 1) + stat_ellipse(type = "norm", linetype = 2) + guides(color = guide_legend(title = "Region")) + theme(axis.text.x = element_text(size = 10, face = "bold", angle = 45)) + theme(axis.text.y = element_text(size = 12, face = "bold")) + theme(axis.title = element_text(size = 14, face = "bold")) + theme(legend.position = "none")
+#save
+ggsave(
+    filename = "PHC_FUN_COMP_NMDS1-2.png",
+    plot = last_plot(),
+    device = NULL,
+    path = NULL,
+    scale = 1,
+    width = 1.5,
+    height = 1.4,
+    units = c("in"),
+    dpi = 300)
+#axes 1-2
+plot_ordination(FUN.PS, ordination, type="sample", color="Compartment", axes=1:2) + theme_bw() + scale_color_manual(values = wes_palette("Moonrise2", n=3)) + geom_point(size = 4, alpha = 1) + stat_ellipse(type = "norm", linetype = 2) + guides(color = guide_legend(title = "Compartment")) + theme(axis.text.y = element_text(size = 12, face = "bold")) + theme(axis.text.x = element_text(size = 8, face = "bold")) + theme(axis.title = element_text(size = 14, face = "bold")) + labs(title = "Fungal Communities") + theme(legend.title = element_text(size = 14)) + facet_grid(~SWS) + theme(strip.text.x = element_text(size = 12, face = "bold"))
+
+```
+
+```{PERMANOVA}
+
+#calculate bray-curtis distance matrix
+library(vegan)
+PHC.bray <- phyloseq::distance(pseq, method = "bray")
+
+#make a dataframe from the sample_data
+PHC.bray.sampleDF <- data.frame(sample_data(pseq))
+
+#adonis test
+adonis(PHC.bray ~ Compartment / SWS, data = PHC.bray.sampleDF, strata = PHC.bray.sampleDF$SWS)
+
+# perform a pairwise adonis test
+library(pairwiseAdonis)
+
+#dataframe of sample data as above
+PHC.sampleDF <- data.frame(sample_data(pseq))
+#pairwise adonis by compartment
+pairwise.adonis(PHC.bray,PHC.bray.sampleDF$Compartment)
+#pairwise adonis by state-wide sites
+pairwise.adonis(PHC.bray,PHC.bray.sampleDF$SWS)
+#pairwise adonis by local sites
+pairwise.adonis(PHC.bray,PHC.bray.sampleDF$LS)
+
+```
+
+```{betadisper, permutest, and ANOSIM}
+
+#run betadisper function on distance matrix
+stat_disp <- betadisper(PRNS+CINP+HC.bray, sample_data(pseq)$Compartment)
+
+#stats
+stat_disp_anova <- anova(stat_disp)
+stat_disp_tukey <- TukeyHSD(stat_disp)
+plot(stat_disp, hull=FALSE, ellipse=TRUE)
+
+#pairwise permutation test for homogeneity of multivariate dispersions
+permutest(stat_disp, pairwise = TRUE, permutations = 1000)
+
+#ANOSIM
+compgroup <- get_variables(pseq, "Compartment")
+compASIM <- anosim(distance(pseq, "bray"), grouping = compgroup)
+ASIM_summary <- compASIM
+
+```
+
+```{Differential Abundance Analysis using DESeq2}
+
+#read phyloseq object [data pruned and rarefied]
+ps.fun.rare <- readRDS("PHC-Fungi-PS-Rarefied.rds")
+
+#subset phyloseq based on sample_data [Bulk soil vs. Endosphere]
+pseq.rare.BS.ES <- subset_samples(ps.fun.rare, Compartment == "Bulk soil" | Compartment == "Endosphere")
+
+#subset Bulk soil and Endosphere by SWS
+PRNS.fun <- subset_samples(pseq.rare.BS.ES, SWS == "PRNS")
+CINP.fun <- subset_samples(pseq.rare.BS.ES, SWS == "CINP")
+HC.fun <- subset_samples(pseq.rare.BS.ES, SWS == "HC")
+
+PRNS.fun.RS.ES <- subset_samples(PRNS.fun, Compartment == "Rhizosphere" | Compartment == "Endosphere")
+
+CINP.fun.RS.ES <- subset_samples(CINP.fun, Compartment == "Rhizosphere" | Compartment == "Endosphere")
+
+HC.fun.RS.ES <- subset_samples(HC.fun, Compartment == "Rhizosphere" | Compartment == "Endosphere")
+
+
+#convert phyloseq to DESeq2 format
+ddsFUN <- phyloseq_to_deseq2(ps.fun.rare.BS.ES, ~ Compartment)
+ddsFUN.PRNS <- phyloseq_to_deseq2(PRNS.fun, ~ Compartment)
+ddsFUN.CINP <- phyloseq_to_deseq2(CINP.fun, ~ Compartment)
+ddsFUN.HC <- phyloseq_to_deseq2(HC.fun, ~ Compartment)
+
+ddsFUN2 <- phyloseq_to_deseq2(Fun.ps.ES.RS, ~ Compartment)
+ddsFUN2.PRNS <- phyloseq_to_deseq2(PRNS.fun.RS.ES, ~ Compartment)
+ddsFUN2.CINP <- phyloseq_to_deseq2(CINP.fun.RS.ES, ~ Compartment)
+ddsFUN2.HC <- phyloseq_to_deseq2(HC.fun.RS.ES, ~ Compartment)
+
+
+#calculate size factors using edgeR
+library(edgeR)
+sizeFactors(ddsFUN) <- calcNormFactors(counts(ddsFUN))
+sizeFactors(ddsFUN.PRNS) <- calcNormFactors(counts(ddsFUN.PRNS))
+sizeFactors(ddsFUN.CINP) <- calcNormFactors(counts(ddsFUN.CINP))
+sizeFactors(ddsFUN.HC) <- calcNormFactors(counts(ddsFUN.HC))
+
+#run DESeq function
+ddsFUN = DESeq(ddsFUN, test="Wald", fitType="parametric")
+ddsFUN.PRNS = DESeq(ddsFUN.PRNS, test="Wald", fitType="parametric")
+ddsFUN.CINP = DESeq(ddsFUN.CINP, test="Wald", fitType="parametric")
+ddsFUN.HC = DESeq(ddsFUN.HC, test="Wald", fitType="parametric")
+
+resFUN <- results(ddsFUN, cooksCutoff = FALSE)
+alpha = 0.1
+sigtabFUN <- resFUN[which(resFUN$padj < alpha), ]
+sigtabFUN <- cbind(as(sigtabFUN, "data.frame"), as(tax_table(ps.fun.rare.BS.ES)[rownames(sigtabFUN), ], "matrix"))
+
+
+resFUN.PRNS <- results(ddsFUN.PRNS, cooksCutoff = FALSE)
+alpha = 0.1
+sigtabFUN.PRNS <- resFUN.PRNS[which(resFUN.PRNS$padj < alpha), ]
+sigtabFUN.PRNS <- cbind(as(sigtabFUN.PRNS, "data.frame"), as(tax_table(PRNS.fun)[rownames(sigtabFUN.PRNS), ], "matrix"))
+
+resFUN.CINP <- results(ddsFUN.CINP, cooksCutoff = FALSE)
+alpha = 0.1
+sigtabFUN.CINP <- resFUN.CINP[which(resFUN.CINP$padj < alpha), ]
+sigtabFUN.CINP <- cbind(as(sigtabFUN.CINP, "data.frame"), as(tax_table(CINP.fun)[rownames(sigtabFUN.CINP), ], "matrix"))
+
+resFUN.HC <- results(ddsFUN.HC, cooksCutoff = FALSE)
+alpha = 0.1
+sigtabFUN.HC <- resFUN.HC[which(resFUN.HC$padj < alpha), ]
+sigtabFUN.HC <- cbind(as(sigtabFUN.HC, "data.frame"), as(tax_table(HC.fun)[rownames(sigtabFUN.HC), ], "matrix"))
+
+x = tapply(sigtabFUN$log2FoldChange, sigtabFUN$Phylum, function(x) max(x))
+x = sort(x, TRUE)
+sigtabFUN$Phylum = factor(as.character(sigtabFUN$Phylum), levels=names(x))
+x = tapply(sigtabFUN$log2FoldChange, sigtabFUN$Genus, function(x) max(x))
+sigtabFUN$Genus = factor(as.character(sigtabFUN$Genus), levels=names(x))
+
+x2 = tapply(sigtabFUN.PRNS$log2FoldChange, sigtabFUN.PRNS$Phylum, function(x2) max(x2))
+x2 = sort(x2, TRUE)
+sigtabFUN.PRNS$Phylum = factor(as.character(sigtabFUN.PRNS$Phylum), levels=names(x2))
+x2 = tapply(sigtabFUN.PRNS$log2FoldChange, sigtabFUN.PRNS$Genus, function(x2) max(x2))
+sigtabFUN.PRNS$Genus = factor(as.character(sigtabFUN.PRNS$Genus), levels=names(x2))
+
+x3 = tapply(sigtabFUN.CINP$log2FoldChange, sigtabFUN.CINP$Phylum, function(x3) max(x3))
+x3 = sort(x3, TRUE)
+sigtabFUN.CINP$Phylum = factor(as.character(sigtabFUN.CINP$Phylum), levels=names(x3))
+x3 = tapply(sigtabFUN.CINP$log2FoldChange, sigtabFUN.CINP$Genus, function(x3) max(x3))
+sigtabFUN.CINP$Genus = factor(as.character(sigtabFUN.CINP$Genus), levels=names(x3))
+
+x4 = tapply(sigtabFUN.HC$log2FoldChange, sigtabFUN.HC$Phylum, function(x4) max(x4))
+x4 = sort(x4, TRUE)
+sigtabFUN.HC$Phylum = factor(as.character(sigtabFUN.HC$Phylum), levels=names(x4))
+x4 = tapply(sigtabFUN.HC$log2FoldChange, sigtabFUN.HC$Genus, function(x4) max(x2))
+sigtabFUN.HC$Genus = factor(as.character(sigtabFUN.HC$Genus), levels=names(x4))
+
+
+#plot [Bulk soil vs. Endosphere - All sites]
+sigtabFUN$Phylum <- factor(sigtabFUN$Phylum, levels = c("p__Ascomycota", "p__Basidiomycota", "p__Glomeromycota", "p__Mortierellomycota"))
+
+colnames(sigtabFUN) <- make.unique(names(sigtabFUN))
+sigtabFUN <- subset(sigtabFUN, Genus !="NA")
+
+ggplot(sigtabFUN, aes(x=Genus, y=log2FoldChange, color=Phylum)) + geom_point(size=7, alpha = 0.7) + geom_point(size = 7, colour ="black", pch=21) + theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) + theme_minimal() + coord_flip() + xlab("") + ylab("[Log2] Fold-Change") + theme(axis.text.y = element_text(size = 7)) + labs(title = "Differentially Abundant Fungal Genera [Bulk soil vs. Endosphere]") + theme(plot.title = element_text(size = 10)) + scale_x_discrete(labels = c("NA" = "Genus Unknown", "g__Xenopolyscytalum" = "Xenopolyscytalum" , "g__Solicoccozyma" = "Solicoccozyma", "g__Saitozyma" = "Saitozyma", "g__Sagenomella" = "Sagenomella", "g__Phialocephala" = "Phialocephala", "g__Penicillium" = "Penicillium", "g__Oidiodendron" = "Oidiodendron", "g__Mortierella" = "Mortierella", "g__Helvella" = "Helvella")) + scale_color_discrete(labels=c("Ascomycota", "Basidiomycota", "Glomeromycota", "Mortierellomycota"))
+
+###with guilds
+#order data and remove 'NAs'
+colnames(sigtabFUN) <- make.unique(names(sigtabFUN))
+sub.BSvES <- subset(sigtabFUN, Genus !="NA")
+library(RColorBrewer)
+getPalette <- colorRampPalette(brewer.pal(9, "Set1"))
+colourCount = length(unique(sub.BSvES$Class.1))
+
+#plot
+ggplot(sub.BSvES, aes(x=GENUS, y=log2FoldChange, color=jrk_template, shape=primary_lifestyle)) + geom_point(size=7, alpha = 0.7) + scale_shape_manual(values=c(15,16,17,18)) + theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) + theme_minimal() + coord_flip() + xlab("") + ylab("[Log2] Fold-Change") + theme(axis.text.y = element_text(size = 7)) + labs(title = "Differentially Abundant Fungal Genera [Bulk soil vs. Endosphere]") + theme(plot.title = element_text(size = 10)) + scale_color_discrete("Phylum")
+
+#PRNS only
+sigtabFUN.PRNS$Phylum <- factor(sigtabFUN.PRNS$Phylum, levels = c("p__Ascomycota", "p__Basidiomycota", "p__Chytridiomycota", "p__Rozellomycota"))
+
+ggplot(sigtabFUN.PRNS, aes(x=Genus, y=log2FoldChange, color=Phylum)) + geom_point(size=7, alpha = 0.7) + geom_point(size = 7, colour ="black", pch=21) + theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) + theme_minimal() + coord_flip() + xlab("") + ylab("[Log2] Fold-Change") + theme(axis.text.y = element_text(size = 7)) + labs(title = "Differentially Abundant Fungal Genera at PRNS [Bulk soil vs. Endosphere]") + theme(plot.title = element_text(size = 10)) + scale_x_discrete(labels = c("NA" = "Genus Unknown", "g__Tomentella" = "Tomentella", "g__Thelonectria" = "Thelonectria", "g__Talaromyces" = "Talaromyces", "g__Saitozyma" = "Saitozyma", "g__Sagenomella" = "Sagenomella", "g__Pseudotomentella" = "Pseudotomentella", "g__Phialomyces" = "Phialomyces", "g__Penicillium" = "Penicillium", "g__Oidiodendron" = "Oidiodendron", "g__Inocybe" = "Inocybe", "g__Helvella" = "Helvella", "g__Gliomastix" = "Gliomastix", "g__Cryptodiscus" = "Cryptodiscus", "g__Amanita" = "Amanita", "g__Acremonium" = "Acremonium")) + scale_color_discrete(labels=c("Ascomycota", "Basidiomycota", "Chytridiomycota", "Rozellomycota", "NA"))
+
+#with guilds
+ggplot(sigtabFUN.PRNS, aes(x=GENUS, y=log2FoldChange, color=Family.1, shape=primary_lifestyle)) + geom_point(size=7, alpha = 0.7) + geom_point(size = 7, colour ="black", pch=21) + theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) + theme_minimal() + coord_flip() + xlab("") + ylab("[Log2] Fold-Change") + theme(axis.text.y = element_text(size = 7)) + labs(title = "Differentially Abundant Fungal Genera at PRNS [Bulk soil vs. Endosphere]") + theme(plot.title = element_text(size = 10)) + scale_color_discrete("Phylum")
+
+#modified
+ggplot(sigtabFUN.PRNS, aes(x=GENUS, y=log2FoldChange, color=Class.1, shape=primary_lifestyle)) + geom_point(size=7, alpha = 0.7) + theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) + theme_minimal() + coord_flip() + xlab("") + ylab("[Log2] Fold-Change") + theme(axis.text.y = element_text(size = 7)) + labs(title = "Differentially Abundant Fungal Genera at PRNS [Bulk soil vs. Endosphere]") + theme(plot.title = element_text(size = 10)) + scale_color_manual(values = mycolors) + scale_shape_manual(values=c(15,16,17,18,20,1)) + labs(color="Class", shape="Guild") + theme(axis.text.y = element_text(size=10, face="bold.italic")) + theme(axis.text.x = element_text(size = 10, face = "bold")) + geom_hline(yintercept=c(-2,2), linetype="dashed", color=c("blue", "red"))
+
+#wit guilds Bulk soil vs. Rhizosphere
+ggplot(sigtabFUN.PRNS.BR, aes(x=GENUS, y=log2FoldChange, color=Phylum, shape=primary_lifestyle)) + geom_point(size=7, alpha = 0.7) + scale_color_manual(values=getPalette(colourCount)) + theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) + theme_minimal() + coord_flip() + xlab("") + ylab("[Log2] Fold-Change") + theme(axis.text.y = element_text(size = 7)) + labs(title = "Differentially Abundant Fungal Genera at PRNS [Bulk soil vs. Rhizosphere]") + theme(plot.title = element_text(size = 10)) 
+
+#CINP only
+sigtabFUN.CINP$Phylum <- factor(sigtabFUN.CINP$Phylum, levels = c("p__Ascomycota", "p__Basidiomycota", "p__Mortierellomycota", "p__Mucoromycota"))
+
+ggplot(sigtabFUN.CINP, aes(x=Genus, y=log2FoldChange, color=Phylum)) + geom_point(size=7, alpha = 0.7) + geom_point(size = 7, colour ="black", pch=21) + theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) + theme_minimal() + coord_flip() + xlab("") + ylab("[Log2] Fold-Change") + theme(axis.text.y = element_text(size = 7)) + labs(title = "Differentially Abundant Fungal Genera at CINP [Bulk soil vs. Endosphere]") + theme(plot.title = element_text(size = 10)) + scale_color_jco() + scale_x_discrete(labels = c("NA" = "Genus Unknown", "g__Umbelopsis" = "Umbelopsis" , "g__Sagenomella" = "Sagenomella", "g__Rhizopogon" = "Rhizopogon", "g__Pseudoarthrographis" = "Pseudoarthrographis", "g__Penicillium" = "Penicillium","g__Neocatenulostroma" = "Neocatenulostroma", "g__Mortierella" = "Mortierella", "g__Geminibasidium" = "Geminibasidium", "g__Exophiala" = "Exophiala", "g__Diaporthe" = "Diaporthe", "g__Devriesia" = "Devriesia", "g__Cryptodiscus" = "Cryptodiscus", "g__Coniochaeta" = "Coniochaeta", "g__Acremonium" = "Acremonium")) + scale_color_discrete(labels=c("Ascomycota", "Basidiomycota", "Mortierellomycota", "Mucoromycota", "NA"))
+
+#with guilds
+colnames(sigtabFUN.CINP) <- make.unique(names(sigtabFUN.CINP))
+sigtabFUN.CINP2 <- subset(sigtabFUN.CINP, Genus !="NA")
+
+ggplot(sigtabFUN.CINP2, aes(x=GENUS, y=log2FoldChange, color=Class.1, shape=primary_lifestyle)) + geom_point(size=7, alpha = 0.7) + scale_shape_manual(values=c(15,16,17,18,20,1)) + scale_color_manual(values= getPalette(colourCount)) + theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) + theme_minimal() + coord_flip() + xlab("") + ylab("[Log2] Fold-Change") + theme(axis.text.y = element_text(size = 7)) + labs(title = "Differentially Abundant Fungal Genera at CINP [Bulk soil vs. Endosphere]") + theme(plot.title = element_text(size = 10))
+
+#modified
+ggplot(sigtabFUN.CINP2, aes(x=GENUS, y=log2FoldChange, color=Class.1, shape=primary_lifestyle)) + geom_point(size=7, alpha = 0.7) + scale_shape_manual(values=c(15,16,17,18,20,1)) + scale_color_manual(values= mycolors) + theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) + theme_minimal() + coord_flip() + xlab("") + ylab("[Log2] Fold-Change") + theme(axis.text.y = element_text(size = 7)) + labs(title = "Differentially Abundant Fungal Genera at CINP [Bulk soil vs. Endosphere]") + theme(plot.title = element_text(size = 10)) + labs(color="Class", shape="Guild") + theme(axis.text.y = element_text(size=10, face="bold.italic")) + theme(axis.text.x = element_text(size = 10, face = "bold")) + geom_hline(yintercept=c(-2,2), linetype="dashed", color=c("blue", "red"))
+
+#HC only
+sigtabFUN.HC$Phylum <- factor(sigtabFUN.HC$Phylum, levels = c("p__Ascomycota", "p__Basidiomycota", "p__Glomeromycota", "p__Mortierellomycota"))
+colnames(sigtabFUN.HC) <- make.unique(names(sigtabFUN.HC))
+sigtabFUN.HC <- subset(sigtabFUN.HC, Genus !="NA")
+
+ggplot(sigtabFUN.HC, aes(x=Genus, y=log2FoldChange, color=Phylum)) + geom_point(size=7, alpha = 0.7) + geom_point(size = 7, colour ="black", pch=21) + theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) + theme_minimal() + coord_flip() + xlab("") + ylab("[Log2] Fold-Change") + scale_color_jco() + theme(axis.text.y = element_text(size = 7)) + labs(title = "Differentially Abundant Fungal Genera at HC [Bulk soil vs. Endosphere]") + theme(plot.title = element_text(size = 10)) + scale_x_discrete(labels = c("NA" = "Genus Unknown", "g__Phialocephala" = "Phialocephala", "g__Oidiodendron" = "Oidiodendron", "g__Mycena" = "Mycena", "g__Mortierella" = "Mortierella")) + scale_color_discrete(labels=c("Ascomycota", "Basidiomycota", "Glomeromycota", "Mortierelloycota"))
+
+#with guilds
+ggplot(sigtabFUN.HC, aes(x=GENUS, y=log2FoldChange, color=Class.1, shape=primary_lifestyle)) + geom_point(size=7, alpha = 0.7) + scale_color_manual(values = getPalette(colourCount)) + theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) + theme_minimal() + coord_flip() + xlab("") + ylab("[Log2] Fold-Change") + theme(axis.text.y = element_text(size = 7)) + labs(title = "Differentially Abundant Fungal Genera at HC [Bulk soil vs. Endosphere]") + theme(plot.title = element_text(size = 10)) 
+#modified
+ggplot(sigtabFUN.HC, aes(x=GENUS, y=log2FoldChange, color=Class.1, shape=primary_lifestyle)) + geom_point(size=7, alpha = 0.7) + scale_color_manual(values = mycolors) + theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) + theme_minimal() + coord_flip() + xlab("") + ylab("[Log2] Fold-Change") + theme(axis.text.y = element_text(size = 7)) + labs(title = "Differentially Abundant Fungal Genera at HC [Bulk soil vs. Endosphere]") + theme(plot.title = element_text(size = 10)) + theme(axis.text.y = element_text(size = 10, face = "bold.italic")) + labs(color="Class", shape="Guild") + theme(axis.text.y = element_text(size=10, face="bold.italic")) + theme(axis.text.x = element_text(size = 10, face = "bold")) + geom_hline(yintercept=c(-2,2), linetype="dashed", color=c("blue", "red"))
+
+```
+
+```{Dominant EcM fungi} + {Networks}
+
+#subset EcM fungi
+FUNGI <- readRDS("PHC-Fungi-PS-Rarefied.rds")
+EcM <- subset_taxa(FUNGI, primary_lifestyle == "ectomycorrhizal")
+EcMdf <- psmelt(EcM)
+tax_table(FUNGI)<-tax_table(FUNGI)[,1:32]
+x1<-parse_phyloseq(FUNGI)
+x1$data$abund_data <- calc_obs_props(x1, "otu_table")
+x1$data$Comparment_abund<-calc_taxon_abund(x1, "abund_data",groups=x1$data$sample_data$Compartment)
+pseq <- microbiome::transform(FUNGI, "compositional")
+EcMtrans <- subset_taxa(pseq, primary_lifestyle == "ectomycorrhizal")
+EcMtransDF <- psmelt(EcMtrans)
+
+#subset endosphere EcM fungi
+fEcM <- subset_samples(EcM, Compartment == "Endosphere")
+tax_table(fEcM)<-tax_table(fEcM)[,1:32]
+x2<-parse_phyloseq(fEcM)
+x2$data$abund_data <- calc_obs_props(x2, "otu_table")
+x2$data$Comparment_abund<-calc_taxon_abund(x2, "abund_data",groups=x2$data$sample_data$Compartment)
+CompEcMendo <- microbiome::transform(fEcM, "compositional")
+EcMfinaldf <- psmelt(CompEcMendo)
+EcMSUB2 <- subset(EcMfinaldf, Abundance > 0.70)
+
+#plot
+getPalette <- colorRampPalette(brewer.pal(9, "Set1"))
+colourCount = length(unique(EcMSUB2$Genus))
+
+ggplot(EcMSUB2, aes(color=Genus, y=Abundance, x=reorder(Sample, Abundance), size = Abundance)) + geom_point() + coord_flip() + theme_minimal() + scale_color_manual(values = getPalette(colourCount), labels = c("Amanita", "Amphinema", "Cenococcum", "Clauvulina", "Cortinarius", "Geopora", "Rhizopogon", "Russula", "Suillus", "Thelephora", "Tomentella", "Tylospora")) + labs(title = "Dominant Endosphere EcM Fungi") + theme(axis.text.x = element_text(face = "bold", size = 10)) + ylab("Relative Abundance %") + xlab("") + scale_y_continuous(labels = scales::percent) + theme(legend.position = "left")
+
+#subset EcM samples with high relative abundances [these are the EcM-Enriched samples used for inter-kingdom comparisons]
+
+ECM_CORE <- prune_samples(row.names(sample_data(ps.fun.rare))== "Hum-ES-8-ITS_S236_L001_R1_001.fastq.gz" | row.names(sample_data(ps.fun.rare)) == "Hum-ES-27-ITS_S255_L001_R1_001.fastq.gz" | row.names(sample_data(ps.fun.rare)) == "Hum-RS-8-ITS_S206_L001_R1_001.fastq.gz" | row.names(sample_data(ps.fun.rare)) == "3A-BS-1-ITS1_S68_L001_R1_001.fastq.gz" | row.names(sample_data(ps.fun.rare)) == "Hum-BS-8-ITS_S176_L001_R1_001.fastq.gz" | row.names(sample_data(ps.fun.rare)) == "3D-ES-ITS1_S93_L001_R1_001.fastq.gz" | row.names(sample_data(ps.fun.rare)) == "Hum-BS-15-ITS_S183_L001_R1_001.fastq.gz" | row.names(sample_data(ps.fun.rare)) == "Hum-BS-9-ITS_S177_L001_R1_001.fastq.gz" | row.names(sample_data(ps.fun.rare)) == "CI-ES-21-ITS_S326_L001_R1_001.fastq.gz" | row.names(sample_data(ps.fun.rare)) == "3B-RS-2-ITS1_S121_L001_R1_001.fastq.gz", ps.fun.rare)
+
+ECM_CORE_DF <- psmelt(ECM_CORE)
+Top_ECM <- subset(ECM_CORE_DF, primary_lifestyle == "ectomycorrhizal")
+Top_ECM_TRIM <- subset(Top_ECM, Abundance > 0)
+ECM_CORE_PS <- subset_taxa(ECM_CORE, primary_lifestyle == "ectomycorrhizal")
+tax_table(ECM_CORE_PS )<-tax_table(ECM_CORE_PS)[,1:32]
+x1<-parse_phyloseq(ECM_CORE_PS)
+x1$data$abund_data <- calc_obs_props(x1, "otu_table")
+x1$data$Comparment_abund<-calc_taxon_abund(x1, "abund_data",groups=x1$data$sample_data$Compartment)
+transform <- microbiome::transform
+pseq22 <- microbiome::transform(ECM_CORE_PS, "compositional")
+pseq22df <- psmelt(pseq22)
+
+#quick plot to visualize distributions of EcM fungal genera within EcM-enriched samples
+ggplot(pseq22df, aes(x=Sample, y=Abundance, fill=Genus)) + geom_bar(stat = "identity", position = "fill") + coord_flip()
+
+
+###
+pseq <- readRDS("PHC-Fungi-Rarefied-Transf.rds")
+EcM <- subset_taxa(pseq, primary_lifestyle == "ectomycorrhizal")
+EcMdf <- psmelt(EcM)
+EcMendo <- subset(EcMdf, Compartment == "Endosphere")
+EcMrhizo <- subset(EcMdf, Compartment == "Rhizosphere")
+EcMbulk <- subset(EcMdf, Compartment == "Bulk soil")
+t.test(EcMendo$Abundance, EcMbulk$Abundance)
+
+###	Welch Two Sample t-test
+
+data:  EcMendo$Abundance and EcMbulk$Abundance
+t = 1.7919, df = 38473, p-value = 0.07316
+alternative hypothesis: true difference in means is not equal to 0
+95 percent confidence interval:
+ -1.711901e-05  3.819334e-04
+sample estimates:
+   mean of x    mean of y 
+0.0008138801 0.0006314729 
+
+t.test(EcMrhizo$Abundance, EcMbulk$Abundance)
+
+###	Welch Two Sample t-test
+
+data:  EcMrhizo$Abundance and EcMbulk$Abundance
+t = 0.67726, df = 44211, p-value = 0.4982
+alternative hypothesis: true difference in means is not equal to 0
+95 percent confidence interval:
+ -0.0001165200  0.0002395598
+sample estimates:
+   mean of x    mean of y 
+0.0006929928 0.0006314729 
+
+t.test(EcMrhizo$Abundance, EcMendo$Abundance)
+
+###	Welch Two Sample t-test
+
+data:  EcMrhizo$Abundance and EcMendo$Abundance
+t = -1.1163, df = 40496, p-value = 0.2643
+alternative hypothesis: true difference in means is not equal to 0
+95 percent confidence interval:
+ -0.0003331413  0.0000913667
+sample estimates:
+   mean of x    mean of y 
+0.0006929928 0.0008138801 
+
+Sapros <- subset_taxa(pseq, primary_lifestyle == "litter_saprotroph" | primary_lifestyle == "wood_saprotroph" | primary_lifestyle == "soil_saprotroph" | primary_lifestyle == "unspecified_saprotroph")
+SaprosDF <- psmelt(Sapros)
+View(SaprosDF)
+SapBULK <- subset(SaprosDF, Compartment == "Bulk soil")
+SapENDO <- subset(SaprosDF, Compartment == "Endosphere")
+SapRhizo <- subset(SaprosDF, Compartment == "Rhizosphere")
+t.test(SapBULK$Abundance, SapENDO$Abundance)
+
+###	Welch Two Sample t-test
+
+data:  SapBULK$Abundance and SapENDO$Abundance
+t = 3.029, df = 139515, p-value = 0.002454
+alternative hypothesis: true difference in means is not equal to 0
+95 percent confidence interval:
+ 3.923822e-05 1.831149e-04
+sample estimates:
+   mean of x    mean of y 
+0.0005888243 0.0004776478 
+
+t.test(SapBULK$Abundance, SapRhizo$Abundance)
+
+###	Welch Two Sample t-test
+
+data:  SapBULK$Abundance and SapRhizo$Abundance
+t = 0.64787, df = 138658, p-value = 0.5171
+alternative hypothesis: true difference in means is not equal to 0
+95 percent confidence interval:
+ -5.129365e-05  1.019470e-04
+sample estimates:
+   mean of x    mean of y 
+0.0005888243 0.0005634977 
+
+t.test(SapENDO$Abundance, SapRhizo$Abundance)
+
+###	Welch Two Sample t-test
+
+data:  SapENDO$Abundance and SapRhizo$Abundance
+t = -2.2096, df = 127795, p-value = 0.02714
+alternative hypothesis: true difference in means is not equal to 0
+95 percent confidence interval:
+ -1.620016e-04 -9.698260e-06
+sample estimates:
+   mean of x    mean of y 
+0.0004776478 0.0005634977 
+
+
+
+
+```
+
+```{Soil Chemistry Analyses}
+
+#load richness data + soil data
+FUNGI <- read.csv("Richness_Fungi_SoilData.csv")
+joint_fungi <- merge(FUNGI, SoilData, by = "Sample.Description", all.x = TRUE)
+
+#pH + richness
+ggplot(joint_fungi, aes(y = log(Observed), x = pH)) + geom_point(size = 5, alpha = 0.4, col = "navy") + theme_minimal() + geom_smooth(method = "lm", col = "#C42126", se = TRUE, size = 2) + theme(axis.text.x = element_text(size = 12, face = "bold")) + theme(axis.text.y = element_text(size = 12, face = "bold")) + theme(axis.title.x = element_text(size = 16, face = "bold")) + theme(axis.title.y = element_text(size = 16, face = "bold")) + stat_cor(label.x = 3.9, label.y = 6, size = 7) + ylab("Log[Observed Richness]")
+
+ggsave(
+    "PHC_Soil_Fungi_pH_OR.png",
+    plot = last_plot(),
+    device = NULL,
+    path = NULL,
+    scale = 1,
+    width = 3.5,
+    height = 4,
+    units = c("in"),
+    dpi = 300)
+
+#P + richness
+ggplot(joint_fungi, aes(x = log(P), y = log(Observed))) + geom_point(size = 5, alpha = 0.4, col = "navy") + theme_minimal() + geom_smooth(method = "lm", col = "#C42126", se = TRUE, size = 2) + theme(axis.text.x = element_text(size = 12, face = "bold")) + theme(axis.text.y = element_text(size = 12, face = "bold")) + theme(axis.title.x = element_text(size = 16, face = "bold")) + theme(axis.title.y = element_text(size = 16, face = "bold")) + stat_cor(label.x = 1, label.y = 5.8, size = 7) + ylab("Log[Observed Richness]") + xlab("Log[Phosphorus (mg/kg)]")
+
+ggsave(
+    "PHC_Soil_Fungi_P_OR.png",
+    plot = last_plot(),
+    device = NULL,
+    path = NULL,
+    scale = 1,
+    width = 3.5,
+    height = 4,
+    units = c("in"),
+    dpi = 300)
+
+#Ca + richness
+ggplot(joint_fungi, aes(x = log(Ca), y = log(Observed))) + geom_point(size = 5, alpha = 0.4, col = "navy") + theme_minimal() + geom_smooth(method = "lm", col = "#C42126", se = TRUE, size = 2) + theme(axis.text.x = element_text(size = 12, face = "bold")) + theme(axis.text.y = element_text(size = 12, face = "bold")) + theme(axis.title.x = element_text(size = 16, face = "bold")) + theme(axis.title.y = element_text(size = 16, face = "bold")) + stat_cor(label.x = 5.3, label.y = 5.7, size = 7) + ylab("Log[Observed Richness]") + xlab("Log[Calcium (mg/kg)]")
+
+ggsave(
+    "PHC_Soil_Fungi_Ca_OR.png",
+    plot = last_plot(),
+    device = NULL,
+    path = NULL,
+    scale = 1,
+    width = 3.5,
+    height = 4,
+    units = c("in"),
+    dpi = 300)
+
+#K + richness
+ggplot(joint_fungi, aes(x = log(K), y = log(Observed))) + geom_point(size = 5, alpha = 0.4, col= "navy") + theme_minimal() + geom_smooth(method = "lm", col = "#C42126", se = TRUE, size = 2) + theme(axis.text.x = element_text(size = 12, face = "bold")) + theme(axis.text.y = element_text(size = 12, face = "bold")) + theme(axis.title.x = element_text(size = 16, face = "bold")) + theme(axis.title.y = element_text(size = 16, face = "bold")) + stat_cor(label.x = 3.2, label.y = 5.7, size = 7) + ylab("Log[Observed Richness]") + xlab("Log[Potassium mg/kg)]")
+
+ggsave(
+    "PHC_Soil_Fungi_K_OR.png",
+    plot = last_plot(),
+    device = NULL,
+    path = NULL,
+    scale = 1,
+    width = 3.5,
+    height = 4,
+    units = c("in"),
+    dpi = 300)
+
+#Total exchange capacity + richness
+ggplot(joint_fungi, aes(x = Total.Exchange.Capacity, y = log(Observed))) + geom_point(size = 5, alpha = 0.4, col = "navy") + theme_minimal() + geom_smooth(method = "lm", col = "#C42126", se = TRUE, size = 2) + theme(axis.text.x = element_text(size = 12, face = "bold")) + theme(axis.text.y = element_text(size = 12, face = "bold")) + theme(axis.title.x = element_text(size = 16, face = "bold")) + theme(axis.title.y = element_text(size = 16, face = "bold")) + stat_cor(label.x = 4, label.y = 6, size = 7) + ylab("Observed Richness") + xlab("Total Exchange Capacity (meg/100 g)")
+
+ggsave(
+    "PHC_Soil_Fungi_TEC_OR.png",
+    plot = last_plot(),
+    device = NULL,
+    path = NULL,
+    scale = 1,
+    width = 3.5,
+    height = 4,
+    units = c("in"),
+    dpi = 300)
+
+#Organic matter + richness
+ggplot(joint_fungi, aes(x = log(Organic.Matter), y = log(Observed))) + geom_point(size = 5, alpha = 0.4, col = "navy") + theme_minimal() + geom_smooth(method = "lm", col = "#C42126", se = TRUE, size = 2) + theme(axis.text.x = element_text(size = 12, face = "bold")) + theme(axis.text.y = element_text(size = 12, face = "bold")) + theme(axis.title.x = element_text(size = 16, face = "bold")) + theme(axis.title.y = element_text(size = 16, face = "bold")) + stat_cor(label.x = 1, label.y = 5.6, size = 7) + ylab("Log[Observed Richness]") + xlab("Log[Organic Matter (%)]")
+
+ggsave(
+    "PHC_Soil_Fungi_OM_OR.png",
+    plot = last_plot(),
+    device = NULL,
+    path = NULL,
+    scale = 1,
+    width = 3.5,
+    height = 4,
+    units = c("in"),
+    dpi = 300)
+
+#Mg + richness
+ggplot(joint_fungi, aes(x = log(Mg), y = log(Observed))) + geom_point(size = 5, alpha = 0.4, col = "navy") + theme_minimal() + geom_smooth(method = "lm", col = "#C42126", se = TRUE, size = 2) + theme(axis.text.x = element_text(size = 12, face = "bold")) + theme(axis.text.y = element_text(size = 12, face = "bold")) + theme(axis.title.x = element_text(size = 16, face = "bold")) + theme(axis.title.y = element_text(size = 16, face = "bold")) + stat_cor(label.x = 4, label.y = 5.7, size = 7) + ylab("Log[Observed Richness]") + xlab("Log[Magnesium (mg/kg)]")
+
+ggsave(
+    "PHC_Soil_Fungi_Mg_OR.png",
+    plot = last_plot(),
+    device = NULL,
+    path = NULL,
+    scale = 1,
+    width = 3.5,
+    height = 4,
+    units = c("in"),
+    dpi = 300)
+
+
+
+
+
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
