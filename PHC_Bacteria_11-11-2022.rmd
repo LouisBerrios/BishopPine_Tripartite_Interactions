@@ -238,6 +238,7 @@ saveRDS(taxa, "PR+Hum+CI_16S_taxa_3-2-22.rds")
 
 ```
 
+
 ```{construct phyloseq object with sample data variables}
 
 # read in environmental sample table
