@@ -232,7 +232,7 @@ head(taxa.print)
 
 # Save OTU table and taxonomic table as RDS files
 # to hand off to dada2_to_phyloseq.R
-saveRDS(seqtab.nochim, "PR+Hum+CI_16S_seqtab_nochim_taxa_3-2-22")
+saveRDS(seqtab.nochim, "PR+Hum+CI_16S_seqtab_nochim_taxa_3-2-22.rds")
 saveRDS(taxa, "PR+Hum+CI_16S_taxa_3-2-22.rds")
 
 
