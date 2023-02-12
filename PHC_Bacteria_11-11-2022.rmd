@@ -240,14 +240,14 @@ saveRDS(taxa, "PR+Hum+CI_16S_taxa_3-2-22.rds")
 
 ```{construct phyloseq object with sample data variables}
 
-#read in environmental sample table
+# read in environmental sample table
 
 sample <- readRDS("PR+Hum+CI_16S_seqtab_nochim_taxa_3-2-22.rds")
 SD <- read.csv("PR+H+CI_16S_SampleData.csv", row.names = 1)
 SAM <- sample_data(SD, errorIfNULL = T)
 taxa <- readRDS("PR+Hum+CI_16S_taxa_3-2-22.rds")
 
-#create a phyloseq object
+# create a phyloseq object
 bac.ps <- phyloseq(otu_table(sample, taxa_are_rows=FALSE), sample_data(SAM), tax_table(taxa))
 
 #filter out unwanted taxa (e.g., mitochondira and chloroplast sequences)
@@ -259,24 +259,24 @@ taxa.print <- tax_table(bac.ps.filt)
 rownames(taxa.print) <- NULL
 head(taxa.print)
 
-#save the filtered dataset 
+# save the filtered dataset 
 saveRDS(bac.ps.filt,"PHC.16S.filtered.3-2-22.rds")
 
-#filter out low abundant sequences
+# filter out low abundant sequences
 bac.ps.filt2 = prune_taxa(taxa_sums(bac.ps.filt) > 10, bac.ps.filt) 
 bac.ps.filt2 = prune_samples(sample_sums(bac.ps.filt2)>1000, bac.ps.filt2)
 
-#save the filtered+pruned dataset
+# save the filtered+pruned dataset
 saveRDS(bac.ps.filt2, "PHC.16S.filt-prune.rds")
 
-#rarefy the dataset
+# rarefy the dataset
 bac.ps.rare <- rarefy_even_depth(bac.ps.filt2, sample.size = min(sample_sums(bac.ps.filt2)),
   rngseed = FALSE, replace = TRUE, trimOTUs = TRUE, verbose = TRUE)
 
-#save rarefied dataset
+# save rarefied dataset
 saveRDS(bac.ps.rare, "Rarefied-PHC-Bacteria.rds")
 
-#create ASV-TAX table [Table S2]
+# create ASV-TAX table [Table S2]
 taxa_names(bac.ps.rare) <- paste0("Seq", seq(ntaxa(bac.ps.rare)))
 ASV_BAC <- data.frame(otu_table(bac.ps.rare))
 TAX_ASV <- data.frame(tax_table(bac.ps.rare))
@@ -284,16 +284,16 @@ ASV_BAC_T <- t(ASV_BAC)
 MERGER2 <- merge(ASV_BAC_T, TAX_ASV, by = "row.names")
 write.csv(MERGER2, "ASV_Bacteria_PHC_Rare_Final.csv")
 
-#create the combined OTU table plus taxonomy string metacoder needs
+# create the combined OTU table plus taxonomy string metacoder needs
 
-#read it in using phyloseq object
+# read it in using phyloseq object
 tax_table(bac.ps.rare)<-tax_table(bac.ps.filt2)[,1:7]
 x1<-parse_phyloseq(bac.ps.rare)
 
-#calculate relative abundance
+# calculate relative abundance
 x1$data$abund_data <- calc_obs_props(x1, "otu_table")
 
-#calculate total abundance by compartment (Bulk Soil, Rhizosphere, Endosphere)
+# calculate total abundance by compartment (Bulk Soil, Rhizosphere, Endosphere)
 x1$data$Comparment_abund<-calc_taxon_abund(x1, "abund_data",groups=x1$data$sample_data$Compartment)
 
 ```
@@ -304,29 +304,29 @@ library(tidyverse)
 library(RColorBrewer)
 library(ggsci)
 
-#transform data [compositional]
+# transform data [compositional]
 pseq <- microbiome::transform(bac.ps.rare, "compositional")
 
-#save as RDS
+# save as RDS
 saveRDS(pseq, "PHC-Bacteria-PS_filter+rare+tran.rds")
 
-#create dataframe 
+# create dataframe 
 pseqDF <- psmelt(pseq)
 
-#get appropriate number of colors for data
+# get appropriate number of colors for data
 getPalette <- colorRampPalette(brewer.pal(9, "Set1"))
 colourCount = length(unique(pseqDF$Phylum))
 
-#plot the relative abundance by Phylum
+# plot the relative abundance by Phylum
 gg <- ggplot(pseqDF, aes(fill=Phylum, y=Abundance, x=Compartment)) + geom_bar(position="fill", stat="identity") + theme_minimal() + facet_grid(~SWS) + scale_fill_manual(values = getPalette(colourCount)) + ylab("Relative Abundance") + theme(axis.text.x = element_text(angle=45)) + scale_y_continuous(labels = scales::percent)
 
-#alternative relative abundance plot by Phylum
+# alternative relative abundance plot by Phylum
 ggplot(pseqDF, aes(fill=Phylum, y=Abundance, x=Compartment)) + geom_bar(position="fill", stat="identity", alpha = 0.9) + theme_minimal() + facet_grid(~SWS) + scale_fill_manual(values = c("#00AFBB", "#D16103", "#52854C", "#E69F00", "#999999", "#009E73", "#F0E442", "#56B4E9", "#D55E00", "#CC79A7", "#FFDB6D", "#C4961A", "#F4EDCA","#FC4E07", "#C3D7A4", "#E7B800", "#4E84C4", "#293352", "#1B9E77", "#0072B2", "#A6761D")) + ylab("Relative Abundance") + theme(axis.text.x = element_text(angle=45)) + scale_y_continuous(labels = scales::percent)
 
-#merge low abundant phyla
+# merge low abundant phyla
 pseqDF$Phylum[pseqDF$Phylum == "Abditibacteriota" | pseqDF$Phylum == "Armatimonadota" | pseqDF$Phylum == "Bdellovibrionota" | pseqDF$Phylum == "Chloroflexi" | pseqDF$Phylum == "Crenarchaeota" | pseqDF$Phylum == "Cyanobacteria" | pseqDF$Phylum == "Desulfobacterota" | pseqDF$Phylum == "Fibrobacterota" | pseqDF$Phylum == "Gemmatimonadota" | pseqDF$Phylum == "Myxococcota" | pseqDF$Phylum == "Nitrospirota" | pseqDF$Phylum == "Patescibacteria" | pseqDF$Phylum == "Spirochaetota" | pseqDF$Phylum == "Sumerlaeota"] <- "Other Phyla"
 
-#alternative No.2
+# alternative No.2
 ggplot(pseqDF, aes(fill=Phylum, y=Abundance, x=Compartment)) + geom_bar(position="fill", stat="identity") + theme_bw() + facet_grid(~SWS) + scale_fill_manual(values = c("darkgoldenrod2", "darkolivegreen", "firebrick3", "gold3", "dodgerblue4", "honeydew3", "lightpink4", "gray1")) + ylab("Relative Abundance") + theme(axis.text.x = element_text(angle=45)) + scale_y_continuous(labels = scales::percent) + theme(axis.text.x = element_text(hjust = 1, face = "bold", size = 12)) + theme(axis.text.y = element_text(face = "bold", size = 14)) + theme(axis.title.y = element_text(size = 16, face = "bold")) + theme(legend.title = element_text(size = 14, face = "bold")) + xlab("") + theme(strip.text.x = element_text(size = 16, face = "bold")) + theme(legend.text = element_text(size = 10, face = "bold"))
 #save
 ggsave(
