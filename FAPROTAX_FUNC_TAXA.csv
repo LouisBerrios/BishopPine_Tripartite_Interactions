@@ -1,0 +1,331 @@
+BioFunction,Genus,Count,Rel.Count
+Methanotrophy,Methylocapsa,8,0.421052632
+Methanotrophy,Methylocella,8,0.421052632
+Methanotrophy,Methylocystis,2,0.105263158
+Methanotrophy,Methyloferula,1,0.052631579
+Methanol Oxidation,Methylophilus,1,0.5
+Methanol Oxidation,Methylotenera,1,0.5
+Methylotrophy,Methylocapsa,8,0.380952381
+Methylotrophy,Methylocella,8,0.380952381
+Methylotrophy,Methylocystis,2,0.095238095
+Methylotrophy,Methyloferula,1,0.047619048
+Methylotrophy,Methylotenera,1,0.047619048
+Methylotrophy,Methylophilus,1,0.047619048
+Aerobic Ammonia Oxidation,Candidatus Nitrocosmicus,5,0.555555556
+Aerobic Ammonia Oxidation,Candidatus Nitrososphaera,4,0.444444444
+Aeroic Nitrite Oxidation,Candidatus Nitrotoga,2,1
+Nitrification,Candidatus Nitrocosmicus,5,0.454545455
+Nitrification,Candidatus Nitrososphaera,4,0.363636364
+Nitrification,Candidatus Nitrotoga,2,0.181818182
+Nitrate Denitrification,Rhodoplanes,43,1
+Nitrite Denitrification,Rhodoplanes,43,1
+Nitrous Oxide Dentrification,Rhodoplanes,43,1
+Denitrification,Rhodoplanes,43,1
+Chitinolysis,Lysobacter,3,1
+Nitrogen Fixation,Beijerinckia,1,0.025
+Nitrogen Fixation,Methylocapsa,8,0.2
+Nitrogen Fixation,Methylocella,8,0.2
+Nitrogen Fixation,Methylocystis,2,0.05
+Nitrogen Fixation,Bradyrhizobium,19,0.475
+Nitrogen Fixation,Herbaspirillum,2,0.05
+Nitrite Respiration,Rhodoplanes,43,1
+Cellulolysis,Acidothermus,221,0.920833333
+Cellulolysis,Cytophaga,31,0.129166667
+Cellulolysis,Sporocytophaga,15,0.0625
+Cellulolysis,Sporangium,3,0.0125
+Xylanolysis,Corallococcus,1,1
+Manganese Oxidation,Geodermatophilus,6,1
+Fermentation,Anoxybacillus,1,0.012658228
+Fermentation,Turicibacter,1,0.012658228
+Fermentation,Lactococcus,1,0.012658228
+Fermentation,Streptococcus,1,0.012658228
+Fermentation,Peptoclostridium,1,0.012658228
+Fermentation,Skermanella,1,0.012658228
+Fermentation,Lautropia,1,0.012658228
+Fermentation,Rhodoferax,2,0.025316456
+Fermentation,Klebsiella,1,0.012658228
+Fermentation,Opitutus,69,0.873417722
+Aerobic Chemoheterotrophy,Acidicapsa,14,0.008313539
+Aerobic Chemoheterotrophy,Edaphobacter,18,0.010688836
+Aerobic Chemoheterotrophy,Granulicella,75,0.044536817
+Aerobic Chemoheterotrophy,Actinospica,22,0.013064133
+Aerobic Chemoheterotrophy,Mycobacterium,36,0.021377672
+Aerobic Chemoheterotrophy,Norcardia,19,0.01128266
+Aerobic Chemoheterotrophy,Acidothermus,221,0.131235154
+Aerobic Chemoheterotrophy,Cryptosporangium,1,0.000593824
+Aerobic Chemoheterotrophy,Fodinicola,3,0.001781473
+Aerobic Chemoheterotrophy,Blastococcus,9,0.005344418
+Aerobic Chemoheterotrophy,Modestobacter,4,0.002375297
+Aerobic Chemoheterotrophy,Nakamurella,4,0.002375297
+Aerobic Chemoheterotrophy,Sporichthya,3,0.001781473
+Aerobic Chemoheterotrophy,Kineosporia,3,0.001781473
+Aerobic Chemoheterotrophy,Knoellia,1,0.000593824
+Aerobic Chemoheterotrophy,Oryzihumus,3,0.001781473
+Aerobic Chemoheterotrophy,Curtobacterium,2,0.001187648
+Aerobic Chemoheterotrophy,Frondihabitans,1,0.000593824
+Aerobic Chemoheterotrophy,Herbiconiux,1,0.000593824
+Aerobic Chemoheterotrophy,Leifsonia,2,0.001187648
+Aerobic Chemoheterotrophy,Actinoplanes,20,0.011876485
+Aerobic Chemoheterotrophy,Catellatospora,1,0.000593824
+Aerobic Chemoheterotrophy,Dactylosporangium,5,0.002969121
+Aerobic Chemoheterotrophy,Micromonospora,2,0.001187648
+Aerobic Chemoheterotrophy,Rugosimonospora,1,0.000593824
+Aerobic Chemoheterotrophy,Verrucosispora,1,0.000593824
+Aerobic Chemoheterotrophy,Aeromicrobium,1,0.000593824
+Aerobic Chemoheterotrophy,Marmoricola,12,0.007125891
+Aerobic Chemoheterotrophy,Nocardioides,35,0.020783848
+Aerobic Chemoheterotrophy,Actinophytocola,8,0.004750594
+Aerobic Chemoheterotrophy,Crossiella,10,0.005938242
+Aerobic Chemoheterotrophy,Kibdelosporangium,2,0.001187648
+Aerobic Chemoheterotrophy,Kutzneria,2,0.001187648
+Aerobic Chemoheterotrophy,Pseudonocardia,27,0.016033254
+Aerobic Chemoheterotrophy,Saccharopolyspora,7,0.00415677
+Aerobic Chemoheterotrophy,Kitasatospora,2,0.001187648
+Aerobic Chemoheterotrophy,Streptomyces,38,0.022565321
+Aerobic Chemoheterotrophy,Microbispora,1,0.000593824
+Aerobic Chemoheterotrophy,Nonomuraea,1,0.000593824
+Aerobic Chemoheterotrophy,Streptosporangium,1,0.000593824
+Aerobic Chemoheterotrophy,Actinoallomurus,15,0.008907363
+Aerobic Chemoheterotrophy,Actinocorallia,1,0.000593824
+Aerobic Chemoheterotrophy,Actinomadura,9,0.005344418
+Aerobic Chemoheterotrophy,Rubrobacter,27,0.016033254
+Aerobic Chemoheterotrophy,Solirubrobacter,53,0.031472684
+Aerobic Chemoheterotrophy,Ferruginibacter,40,0.023752969
+Aerobic Chemoheterotrophy,Cytophaga,31,0.018408551
+Aerobic Chemoheterotrophy,Flavobacterium,21,0.012470309
+Aerobic Chemoheterotrophy,Chryseobacterium,1,0.000593824
+Aerobic Chemoheterotrophy,Pedobacter,11,0.006532067
+Aerobic Chemoheterotrophy,Alicyclobacillus,7,0.00415677
+Aerobic Chemoheterotrophy,Domibacillus,2,0.001187648
+Aerobic Chemoheterotrophy,Paenibacillus,70,0.041567696
+Aerobic Chemoheterotrophy,Isosphaera,1,0.000593824
+Aerobic Chemoheterotrophy,Singulisphaera,49,0.029097387
+Aerobic Chemoheterotrophy,Schlesneria,4,0.002375297
+Aerobic Chemoheterotrophy,Acidicaldus,27,0.016033254
+Aerobic Chemoheterotrophy,Acidiphilium,30,0.017814727
+Aerobic Chemoheterotrophy,Acidisphaera,8,0.004750594
+Aerobic Chemoheterotrophy,Acidocella,50,0.029691211
+Aerobic Chemoheterotrophy,Rosemonas,1,0.000593824
+Aerobic Chemoheterotrophy,Skermanella,1,0.000593824
+Aerobic Chemoheterotrophy,Asticcacaulis,6,0.003562945
+Aerobic Chemoheterotrophy,Caulobacter,8,0.004750594
+Aerobic Chemoheterotrophy,Reyranella,43,0.025534442
+Aerobic Chemoheterotrophy,Microvirga,10,0.005938242
+Aerobic Chemoheterotrophy,Devosia,6,0.003562945
+Aerobic Chemoheterotrophy,Hyphomicrobium,16,0.009501188
+Aerobic Chemoheterotrophy,Pedomicrobium,8,0.004750594
+Aerobic Chemoheterotrophy,Labrys,18,0.010688836
+Aerobic Chemoheterotrophy,Mesorhizobium,5,0.002969121
+Aerobic Chemoheterotrophy,Phyllobacterium,2,0.001187648
+Aerobic Chemoheterotrophy,Bradyrhizobium,19,0.01128266
+Aerobic Chemoheterotrophy,Rhodoplanes,43,0.025534442
+Aerobic Chemoheterotrophy,Rhodopseudomonas,4,0.002375297
+Aerobic Chemoheterotrophy,Altererythrobacter,5,0.002969121
+Aerobic Chemoheterotrophy,Blastomonas,2,0.001187648
+Aerobic Chemoheterotrophy,Ellin6055,15,0.008907363
+Aerobic Chemoheterotrophy,Hephaestia,5,0.002969121
+Aerobic Chemoheterotrophy,Novosphingobium,16,0.009501188
+Aerobic Chemoheterotrophy,Parablastomonas,1,0.000593824
+Aerobic Chemoheterotrophy,Plot4-2H12,3,0.001781473
+Aerobic Chemoheterotrophy,Porphyrobacter,1,0.000593824
+Aerobic Chemoheterotrophy,Qipengyuania,2,0.001187648
+Aerobic Chemoheterotrophy,Rhizorhapis,1,0.000593824
+Aerobic Chemoheterotrophy,Sphingoaurantiacus,3,0.001781473
+Aerobic Chemoheterotrophy,Sphingobium,5,0.002969121
+Aerobic Chemoheterotrophy,Sphingomonas,62,0.036817102
+Aerobic Chemoheterotrophy,Cupriavidus,1,0.000593824
+Aerobic Chemoheterotrophy,Rhodoferax,2,0.001187648
+Aerobic Chemoheterotrophy,Rubrivivax,1,0.000593824
+Aerobic Chemoheterotrophy,Sphaerotilus,3,0.001781473
+Aerobic Chemoheterotrophy,Klebsiella,1,0.000593824
+Aerobic Chemoheterotrophy,Legionella,73,0.043349169
+Aerobic Chemoheterotrophy,Acinetobacter,1,0.000593824
+Aerobic Chemoheterotrophy,Pseudomonas,19,0.01128266
+Aerobic Chemoheterotrophy,Nevskia,21,0.012470309
+Aerobic Chemoheterotrophy,Rhodanobacter,25,0.014845606
+Aerobic Chemoheterotrophy,Arenimonas,4,0.002375297
+Aerobic Chemoheterotrophy,Thermomonas,3,0.001781473
+Aerobic Chemoheterotrophy,Chthoniobacter,113,0.067102138
+Aerobic Chemoheterotrophy,Cerasicoccus,6,0.003562945
+Aerobic Chemoheterotrophy,Prosthecobacter,2,0.001187648
+Aerobic Chemoheterotrophy,Roseimicrobium,17,0.010095012
+Aerobic Chemoheterotrophy,Terriglobus,5,0.002969121
+Animal Parasites or Symbionts,Rosemonas,1,0.016949153
+Animal Parasites or Symbionts,Afipia,8,0.13559322
+Animal Parasites or Symbionts,Coxiella,15,0.254237288
+Animal Parasites or Symbionts,Candidatus Xiphinematobacter,35,0.593220339
+Aromatic Compound Degradation,Rhodococcus,1,0.027027027
+Aromatic Compound Degradation,Norcadioides,35,0.945945946
+Aromatic Compound Degradation,Acinetobacter,1,0.027027027
+Aliphatic Non-Methane Hydrocarbon Degradation,Rhodococcus,1,1
+Hydrocarbon Degradation,Rhodococcus,1,0.05
+Hydrocarbon Degradation,Methylocapsa,8,0.4
+Hydrocarbon Degradation,Methylocella,8,0.4
+Hydrocarbon Degradation,Methylocystis,2,0.1
+Hydrocarbon Degradation,Methyloferula,1,0.05
+Iron Respiration,Geobacter,1,0.035714286
+Iron Respiration,Acidicaldus,27,0.964285714
+Nitrate Respiration,Schlesneria,4,0.083333333
+Nitrate Respiration,Rhodoplanes,43,0.895833333
+Nitrate Respiration,Aquabacterium,1,0.020833333
+Nitrate Reduction,Knoellia,1,0.006711409
+Nitrate Reduction,Humibacter,1,0.006711409
+Nitrate Reduction,Rubrobacter,27,0.181208054
+Nitrate Reduction,Schlesneria,4,0.026845638
+Nitrate Reduction,Rhodoplanes,43,0.288590604
+Nitrate Reduction,Cupriavidus,1,0.006711409
+Nitrate Reduction,Aquabacterium,1,0.006711409
+Nitrate Reduction,Ideonella,1,0.006711409
+Nitrate Reduction,Klebsiella,1,0.006711409
+Nitrate Reduction,Opitutus,69,0.463087248
+Nitrogen Respiration,Schlesneria,4,0.083333333
+Nitrogen Respiration,Rhodoplanes,43,0.895833333
+Nitrogen Respiration,Aquabacterium,1,0.020833333
+Intracellular Parasites,Candidatus Megaira,1,0.008695652
+Intracellular Parasites,Coxiella,15,0.130434783
+Intracellular Parasites,Legionella,73,0.634782609
+Intracellular Parasites,Estrella,1,0.008695652
+Intracellular Parasites,Candidatus Protochlamydia,11,0.095652174
+Intracellular Parasites,Neochlamydia,12,0.104347826
+Intracellular Parasites,Candidatus Rhabdochlamydia,1,0.008695652
+Intracellular Parasites,Ga0074140,1,0.008695652
+Predatory or Exoparasitic,Bacteriovorax,4,0.017621145
+Predatory or Exoparasitic,Bdellovibrio,85,0.374449339
+Predatory or Exoparasitic,OM27 clade,4,0.017621145
+Predatory or Exoparasitic,Haliangium,133,0.585903084
+Predatory or Exoparasitic,Cupriavidus,1,0.004405286
+Non-Photosynthetic Cyanobacteria,Candidatus Obscuribacter,3,0.6
+Non-Photosynthetic Cyanobacteria,Vampirovibrio,2,0.4
+Anoxygenic Photoautotrophy S-Oxidizing,Rhodoplanes,43,1
+Anoxygenic Photoautotrophy,Rhodoplanes,43,1
+Photoautotrophy,Rhodoplanes,43,1
+Photoheterotrophy,Rhodopila,26,0.298850575
+Photoheterotrophy,Rhodomicrobium,11,0.126436782
+Photoheterotrophy,Rhodoplanes,43,0.494252874
+Photoheterotrophy,Rhodopseudomonas,4,0.045977011
+Photoheterotrophy,Porphyrobacter,1,0.011494253
+Photoheterotrophy,Rhodoferax,2,0.022988506
+Phototrophy,Rhodopila,26,0.298850575
+Phototrophy,Rhodomicrobium,11,0.126436782
+Phototrophy,Rhodoplanes,43,0.494252874
+Phototrophy,Rhodopseudomonas,4,0.045977011
+Phototrophy,Porphyrobacter,1,0.011494253
+Phototrophy,Rhodoferax,2,0.022988506
+Ureolysis,Humibacter,1,0.009174312
+Ureolysis,Singulisphaera,49,0.449541284
+Ureolysis,Roseomonas,1,0.009174312
+Ureolysis,Aminobacter,1,0.009174312
+Ureolysis,Mesorhizobium,5,0.04587156
+Ureolysis,Afipia,8,0.073394495
+Ureolysis,Rhizobacter,7,0.064220183
+Ureolysis,Methylophilus,1,0.009174312
+Ureolysis,Duganella,4,0.036697248
+Ureolysis,Herbaspirillum,2,0.018348624
+Ureolysis,Massilia,25,0.229357798
+Ureolysis,Rugamonas,2,0.018348624
+Ureolysis,Thermomonas,3,0.027522936
+Chemoheterotrophy,Acidicapsa,14,0.008313539
+Chemoheterotrophy,Edaphobacter,18,0.010688836
+Chemoheterotrophy,Granulicella,75,0.044536817
+Chemoheterotrophy,Actinospica,22,0.013064133
+Chemoheterotrophy,Mycobacterium,36,0.021377672
+Chemoheterotrophy,Norcardia,19,0.01128266
+Chemoheterotrophy,Acidothermus,221,0.131235154
+Chemoheterotrophy,Cryptosporangium,1,0.000593824
+Chemoheterotrophy,Fodinicola,3,0.001781473
+Chemoheterotrophy,Blastococcus,9,0.005344418
+Chemoheterotrophy,Modestobacter,4,0.002375297
+Chemoheterotrophy,Nakamurella,4,0.002375297
+Chemoheterotrophy,Sporichthya,3,0.001781473
+Chemoheterotrophy,Kineosporia,3,0.001781473
+Chemoheterotrophy,Knoellia,1,0.000593824
+Chemoheterotrophy,Oryzihumus,3,0.001781473
+Chemoheterotrophy,Curtobacterium,2,0.001187648
+Chemoheterotrophy,Frondihabitans,1,0.000593824
+Chemoheterotrophy,Herbiconiux,1,0.000593824
+Chemoheterotrophy,Leifsonia,2,0.001187648
+Chemoheterotrophy,Actinoplanes,20,0.011876485
+Chemoheterotrophy,Catellatospora,1,0.000593824
+Chemoheterotrophy,Dactylosporangium,5,0.002969121
+Chemoheterotrophy,Micromonospora,2,0.001187648
+Chemoheterotrophy,Rugosimonospora,1,0.000593824
+Chemoheterotrophy,Verrucosispora,1,0.000593824
+Chemoheterotrophy,Aeromicrobium,1,0.000593824
+Chemoheterotrophy,Marmoricola,12,0.007125891
+Chemoheterotrophy,Nocardioides,35,0.020783848
+Chemoheterotrophy,Actinophytocola,8,0.004750594
+Chemoheterotrophy,Crossiella,10,0.005938242
+Chemoheterotrophy,Kibdelosporangium,2,0.001187648
+Chemoheterotrophy,Kutzneria,2,0.001187648
+Chemoheterotrophy,Pseudonocardia,27,0.016033254
+Chemoheterotrophy,Saccharopolyspora,7,0.00415677
+Chemoheterotrophy,Kitasatospora,2,0.001187648
+Chemoheterotrophy,Streptomyces,38,0.022565321
+Chemoheterotrophy,Microbispora,1,0.000593824
+Chemoheterotrophy,Nonomuraea,1,0.000593824
+Chemoheterotrophy,Streptosporangium,1,0.000593824
+Chemoheterotrophy,Actinoallomurus,15,0.008907363
+Chemoheterotrophy,Actinocorallia,1,0.000593824
+Chemoheterotrophy,Actinomadura,9,0.005344418
+Chemoheterotrophy,Rubrobacter,27,0.016033254
+Chemoheterotrophy,Solirubrobacter,53,0.031472684
+Chemoheterotrophy,Ferruginibacter,40,0.023752969
+Chemoheterotrophy,Cytophaga,31,0.018408551
+Chemoheterotrophy,Flavobacterium,21,0.012470309
+Chemoheterotrophy,Chryseobacterium,1,0.000593824
+Chemoheterotrophy,Pedobacter,11,0.006532067
+Chemoheterotrophy,Alicyclobacillus,7,0.00415677
+Chemoheterotrophy,Domibacillus,2,0.001187648
+Chemoheterotrophy,Paenibacillus,70,0.041567696
+Chemoheterotrophy,Isosphaera,1,0.000593824
+Chemoheterotrophy,Singulisphaera,49,0.029097387
+Chemoheterotrophy,Schlesneria,4,0.002375297
+Chemoheterotrophy,Acidicaldus,27,0.016033254
+Chemoheterotrophy,Acidiphilium,30,0.017814727
+Chemoheterotrophy,Acidisphaera,8,0.004750594
+Chemoheterotrophy,Acidocella,50,0.029691211
+Chemoheterotrophy,Rosemonas,1,0.000593824
+Chemoheterotrophy,Skermanella,1,0.000593824
+Chemoheterotrophy,Asticcacaulis,6,0.003562945
+Chemoheterotrophy,Caulobacter,8,0.004750594
+Chemoheterotrophy,Reyranella,43,0.025534442
+Chemoheterotrophy,Microvirga,10,0.005938242
+Chemoheterotrophy,Devosia,6,0.003562945
+Chemoheterotrophy,Hyphomicrobium,16,0.009501188
+Chemoheterotrophy,Pedomicrobium,8,0.004750594
+Chemoheterotrophy,Labrys,18,0.010688836
+Chemoheterotrophy,Mesorhizobium,5,0.002969121
+Chemoheterotrophy,Phyllobacterium,2,0.001187648
+Chemoheterotrophy,Bradyrhizobium,19,0.01128266
+Chemoheterotrophy,Rhodoplanes,43,0.025534442
+Chemoheterotrophy,Rhodopseudomonas,4,0.002375297
+Chemoheterotrophy,Altererythrobacter,5,0.002969121
+Chemoheterotrophy,Blastomonas,2,0.001187648
+Chemoheterotrophy,Ellin6055,15,0.008907363
+Chemoheterotrophy,Hephaestia,5,0.002969121
+Chemoheterotrophy,Novosphingobium,16,0.009501188
+Chemoheterotrophy,Parablastomonas,1,0.000593824
+Chemoheterotrophy,Plot4-2H12,3,0.001781473
+Chemoheterotrophy,Porphyrobacter,1,0.000593824
+Chemoheterotrophy,Qipengyuania,2,0.001187648
+Chemoheterotrophy,Rhizorhapis,1,0.000593824
+Chemoheterotrophy,Sphingoaurantiacus,3,0.001781473
+Chemoheterotrophy,Sphingobium,5,0.002969121
+Chemoheterotrophy,Sphingomonas,62,0.036817102
+Chemoheterotrophy,Cupriavidus,1,0.000593824
+Chemoheterotrophy,Rhodoferax,2,0.001187648
+Chemoheterotrophy,Rubrivivax,1,0.000593824
+Chemoheterotrophy,Sphaerotilus,3,0.001781473
+Chemoheterotrophy,Klebsiella,1,0.000593824
+Chemoheterotrophy,Legionella,73,0.043349169
+Chemoheterotrophy,Acinetobacter,1,0.000593824
+Chemoheterotrophy,Pseudomonas,19,0.01128266
+Chemoheterotrophy,Nevskia,21,0.012470309
+Chemoheterotrophy,Rhodanobacter,25,0.014845606
+Chemoheterotrophy,Arenimonas,4,0.002375297
+Chemoheterotrophy,Thermomonas,3,0.001781473
+Chemoheterotrophy,Chthoniobacter,113,0.067102138
+Chemoheterotrophy,Cerasicoccus,6,0.003562945
+Chemoheterotrophy,Prosthecobacter,2,0.001187648
+Chemoheterotrophy,Roseimicrobium,17,0.010095012
+Chemoheterotrophy,Terriglobus,5,0.002969121
